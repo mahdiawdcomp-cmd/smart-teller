@@ -244,6 +244,23 @@ async function sendTextMessage(phoneNumber, text) {
 }
 
 // --- Check and initialize WhatsApp connection on startup ---
+function normalizePhone(phone) {
+  let clean = phone.replace(/[^0-9]/g, '');
+  if (clean.startsWith('00964')) {
+    clean = '964' + clean.substring(5);
+  } else if (clean.startsWith('00')) {
+    clean = clean.substring(2);
+  }
+  if (clean.startsWith('07')) {
+    clean = '964' + clean.substring(1);
+  } else if ((clean.startsWith('77') || clean.startsWith('78') || clean.startsWith('75')) && clean.length === 10) {
+    clean = '964' + clean;
+  } else if (!clean.startsWith('964')) {
+    clean = '964' + clean;
+  }
+  return clean;
+}
+
 async function requestPairingCodeForPhone(phoneNumber) {
   if (!sock) {
     throw new Error('سيرفر الواتساب غير جاهز بعد، يرجى المحاولة بعد قليل.');
@@ -252,17 +269,11 @@ async function requestPairingCodeForPhone(phoneNumber) {
     throw new Error('الواتساب متصل بالفعل!');
   }
 
-  // Format phone number to E.164 (e.g. 9647701234567)
-  let cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
-  if (!cleanNumber.startsWith('964') && cleanNumber.startsWith('0')) {
-    cleanNumber = '964' + cleanNumber.substring(1);
-  } else if (!cleanNumber.startsWith('964')) {
-    cleanNumber = '964' + cleanNumber;
-  }
+  const cleanNumber = normalizePhone(phoneNumber);
 
   try {
     const code = await sock.requestPairingCode(cleanNumber);
-    return code;
+    return { code, cleanNumber };
   } catch (err) {
     console.error("Error requesting pairing code from Baileys:", err);
     throw new Error(`فشل طلب الكود: ${err.message}`);

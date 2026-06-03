@@ -9,6 +9,7 @@ export default function WhatsAppSetup() {
   const [pairingMethod, setPairingMethod] = useState('phone'); // 'phone' | 'qr'
   const [phoneNumber, setPhoneNumber] = useState('');
   const [pairingCode, setPairingCode] = useState('');
+  const [targetNumber, setTargetNumber] = useState('');
   const [pairingLoading, setPairingLoading] = useState(false);
 
   const handleRequestPairingCode = async (e) => {
@@ -21,10 +22,12 @@ export default function WhatsAppSetup() {
     setPairingLoading(true);
     setMessage('');
     setPairingCode('');
+    setTargetNumber('');
     try {
       const data = await api.pairPhone(phoneNumber);
       if (data.code) {
         setPairingCode(data.code);
+        setTargetNumber(data.cleanNumber || '');
         setMessage('تم توليد كود الربط بنجاح! يرجى إدخاله في هاتفك.');
       } else {
         throw new Error('لم يتم إرجاع كود من السيرفر');
@@ -184,6 +187,30 @@ export default function WhatsAppSetup() {
                     }}>
                       {pairingCode}
                     </div>
+                    
+                    {targetNumber && (
+                      <div style={{
+                        backgroundColor: '#fffbeb',
+                        border: '1px solid #fef3c7',
+                        padding: '1rem',
+                        borderRadius: '12px',
+                        marginBottom: '1rem',
+                        fontSize: '18px',
+                        color: '#78350f',
+                        textAlign: 'right'
+                      }}>
+                        <strong style={{ display: 'block', marginBottom: '0.5rem' }}>⚠️ تنبيه هام: الرقم الذي يجب كتابته في الموبايل هو:</strong>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', direction: 'ltr', fontWeight: 'bold', fontSize: '20px', backgroundColor: '#ffffff', padding: '0.5rem 1rem', borderRadius: '8px', border: '1px solid #fde68a' }}>
+                          <span style={{ fontSize: '16px', color: 'var(--text-muted)' }}>العراق (+964)</span>
+                          <span style={{ color: 'var(--danger)', fontSize: '24px', letterSpacing: '1px' }}>
+                            {targetNumber.startsWith('964') ? targetNumber.substring(3) : targetNumber}
+                          </span>
+                        </div>
+                        <p style={{ fontSize: '14px', margin: '0.5rem 0 0 0', color: '#b45309', lineHeight: '1.4' }}>
+                          * تأكد من اختيار رمز دولة **العراق (+964)** في هاتفك، ثم اكتب الرقم المكتوب باللون الأحمر بالضبط (بدون كتابة الصفر 0 في البداية).
+                        </p>
+                      </div>
+                    )}
                     
                     <h4 style={{ margin: '0.75rem 0 0.5rem 0', color: 'var(--text-dark)', fontSize: '18px', fontWeight: 'bold', textAlign: 'right' }}>⚠️ طريقة إدخال الكود في هاتفك:</h4>
                     <ol style={{ margin: 0, paddingRight: '1.25rem', fontSize: '16px', color: 'var(--text-dark)', textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>

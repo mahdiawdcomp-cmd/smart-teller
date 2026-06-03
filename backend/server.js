@@ -291,8 +291,8 @@ app.post('/api/whatsapp/pair-phone', async (req, res) => {
     if (!phoneNumber) {
       return res.status(400).json({ error: 'PhoneNumber is required' });
     }
-    const code = await requestPairingCodeForPhone(phoneNumber);
-    res.json({ success: true, code });
+    const result = await requestPairingCodeForPhone(phoneNumber);
+    res.json({ success: true, code: result.code, cleanNumber: result.cleanNumber });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

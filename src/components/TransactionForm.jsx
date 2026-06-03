@@ -106,7 +106,7 @@ export default function TransactionForm({ customer, onClose, onSuccess }) {
                   name="txType" 
                   value="deposit" 
                   checked={type === 'deposit'} 
-                  onChange={() => setType('deposit')}
+                  onChange={() => { setType('deposit'); setCommission(''); }}
                   style={{ width: '20px', height: '20px' }}
                 />
                 إيداع (ينطيني فلوس)
@@ -172,18 +172,20 @@ export default function TransactionForm({ customer, onClose, onSuccess }) {
             )}
           </div>
 
-          {/* Commission Input */}
-          <div className="form-group">
-            <label>عمولة الصراف (أرباحك من هذه العملية) *</label>
-            <input
-              type="number"
-              className="form-input"
-              placeholder="0"
-              value={commission}
-              onChange={e => setCommission(e.target.value)}
-              min="0"
-            />
-          </div>
+          {/* Commission Input (Only for withdrawals) */}
+          {type === 'withdrawal' && (
+            <div className="form-group">
+              <label>عمولة الصراف (أرباحك من هذه العملية) *</label>
+              <input
+                type="number"
+                className="form-input"
+                placeholder="0"
+                value={commission}
+                onChange={e => setCommission(e.target.value)}
+                min="0"
+              />
+            </div>
+          )}
 
           {/* Notes Input */}
           <div className="form-group">

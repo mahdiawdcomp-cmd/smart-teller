@@ -137,7 +137,7 @@ app.post('/api/customers/:id/transactions', async (req, res) => {
     }
 
     const numAmount = parseFloat(amount);
-    const numCommission = parseFloat(commission) || 0;
+    const numCommission = type === 'deposit' ? 0 : (parseFloat(commission) || 0);
 
     const transaction = {
       id: Date.now().toString(),

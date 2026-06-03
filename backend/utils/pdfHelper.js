@@ -108,9 +108,8 @@ function generatePdfBase64(customerName, transactions, periodText, balance) {
       // Commission: 80 width (350 to 430)
       // Notes: 115 width (430 to 545)
       
-      doc.text(bidiText('الملاحظات'), 430, tableTop + 6, { width: 105, align: 'center' });
-      doc.text(bidiText('العمولة'), 350, tableTop + 6, { width: 80, align: 'center' });
-      doc.text(bidiText('المبلغ'), 250, tableTop + 6, { width: 100, align: 'center' });
+      doc.text(bidiText('الملاحظات'), 360, tableTop + 6, { width: 185, align: 'center' });
+      doc.text(bidiText('المبلغ الإجمالي'), 250, tableTop + 6, { width: 110, align: 'center' });
       doc.text(bidiText('العملية'), 170, tableTop + 6, { width: 80, align: 'center' });
       doc.text(bidiText('التاريخ'), 50, tableTop + 6, { width: 120, align: 'center' });
 
@@ -130,14 +129,17 @@ function generatePdfBase64(customerName, transactions, periodText, balance) {
 
         const dateStr = new Date(tx.date).toLocaleDateString('en-US');
         const typeStr = tx.type === 'deposit' ? 'إيداع (له)' : 'سحب (عليه)';
-        const amountStr = Number(tx.amount).toLocaleString('en-US') + ' د.ع';
-        const commStr = Number(tx.commission || 0).toLocaleString('en-US') + ' د.ع';
-        const notesStr = tx.notes || '-';
+        
+        const totalAmount = tx.amount + (tx.type === 'withdrawal' ? (tx.commission || 0) : 0);
+        const amountStr = Number(totalAmount).toLocaleString('en-US') + ' د.ع';
+        
+        const formattedNotes = tx.type === 'withdrawal' && tx.commission > 0
+          ? `${tx.notes || ''} (العمولة: ${Number(tx.commission).toLocaleString('en-US')} د.ع)`
+          : (tx.notes || '-');
 
         // Draw Row Cells
-        doc.text(bidiText(notesStr), 430, y + 6, { width: 105, align: 'center' });
-        doc.text(bidiText(commStr), 350, y + 6, { width: 80, align: 'center' });
-        doc.text(bidiText(amountStr), 250, y + 6, { width: 100, align: 'center' });
+        doc.text(bidiText(formattedNotes), 360, y + 6, { width: 185, align: 'center' });
+        doc.text(bidiText(amountStr), 250, y + 6, { width: 110, align: 'center' });
         doc.text(bidiText(typeStr), 170, y + 6, { width: 80, align: 'center' });
         doc.text(bidiText(dateStr), 50, y + 6, { width: 120, align: 'center' });
 

@@ -157,8 +157,8 @@ app.post('/api/customers/:id/transactions', async (req, res) => {
       const currentTransactions = customer.transactions || [];
       const updatedTransactions = [transaction, ...currentTransactions];
       
-      // Update balance
-      let balanceChange = type === 'deposit' ? numAmount : -numAmount;
+      // Update balance: for withdrawals, deduct amount + commission
+      let balanceChange = type === 'deposit' ? numAmount : -(numAmount + numCommission);
       const newBalance = (customer.balance || 0) + balanceChange;
 
       await docRef.update({
@@ -175,7 +175,7 @@ app.post('/api/customers/:id/transactions', async (req, res) => {
       if (!customer.transactions) customer.transactions = [];
       customer.transactions.unshift(transaction);
       
-      let balanceChange = type === 'deposit' ? numAmount : -numAmount;
+      let balanceChange = type === 'deposit' ? numAmount : -(numAmount + numCommission);
       customer.balance = (customer.balance || 0) + balanceChange;
 
       await writeData(data);

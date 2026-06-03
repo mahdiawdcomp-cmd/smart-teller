@@ -316,33 +316,36 @@ export default function Statements({ customer, onBack }) {
               <tr>
                 <th>التاريخ والوقت</th>
                 <th>نوع العملية</th>
-                <th>المبلغ (د.ع)</th>
-                <th>العمولة (د.ع)</th>
+                <th>المبلغ الإجمالي (د.ع)</th>
                 <th>الملاحظات</th>
               </tr>
             </thead>
             <tbody>
-              {filteredTransactions.map((tx) => (
-                <tr key={tx.id}>
-                  <td style={{ fontSize: '15px' }}>
-                    {new Date(tx.date).toLocaleString('ar-EG')}
-                  </td>
-                  <td>
-                    <span className={`badge ${tx.type === 'deposit' ? 'badge-deposit' : 'badge-withdrawal'}`}>
-                      {tx.type === 'deposit' ? 'إيداع (ينطيني)' : 'سحب/حوالة (ياخذ)'}
-                    </span>
-                  </td>
-                  <td style={{ fontWeight: 'bold', color: tx.type === 'deposit' ? 'var(--success)' : 'var(--danger)' }}>
-                    {Number(tx.amount).toLocaleString('en-US')} د.ع
-                  </td>
-                  <td style={{ color: 'var(--primary)' }}>
-                    {Number(tx.commission || 0).toLocaleString('en-US')} د.ع
-                  </td>
-                  <td style={{ fontSize: '16px', color: 'var(--text-muted)' }}>
-                    {tx.notes || '-'}
-                  </td>
-                </tr>
-              ))}
+              {filteredTransactions.map((tx) => {
+                const totalAmount = tx.amount + (tx.type === 'withdrawal' ? (tx.commission || 0) : 0);
+                const displayNotes = tx.type === 'withdrawal' && tx.commission > 0
+                  ? `${tx.notes || ''} (العمولة: ${tx.commission.toLocaleString('en-US')} د.ع)`
+                  : (tx.notes || '-');
+
+                return (
+                  <tr key={tx.id}>
+                    <td style={{ fontSize: '15px' }}>
+                      {new Date(tx.date).toLocaleString('ar-EG')}
+                    </td>
+                    <td>
+                      <span className={`badge ${tx.type === 'deposit' ? 'badge-deposit' : 'badge-withdrawal'}`}>
+                        {tx.type === 'deposit' ? 'إيداع (ينطيني)' : 'سحب/حوالة (ياخذ)'}
+                      </span>
+                    </td>
+                    <td style={{ fontWeight: 'bold', color: tx.type === 'deposit' ? 'var(--success)' : 'var(--danger)' }}>
+                      {Number(totalAmount).toLocaleString('en-US')} د.ع
+                    </td>
+                    <td style={{ fontSize: '16px', color: 'var(--text-dark)' }}>
+                      {displayNotes}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

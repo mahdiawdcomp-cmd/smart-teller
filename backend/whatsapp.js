@@ -139,8 +139,15 @@ async function connectToWhatsApp() {
     if (qr) {
       connectionState = 'qr_ready';
       try {
-        // Generate QR code data URL for the frontend
-        qrCodeData = await QRCode.toDataURL(qr);
+        // Generate QR code data URL for the frontend with high resolution and clear border
+        qrCodeData = await QRCode.toDataURL(qr, {
+          width: 512,
+          margin: 4,
+          color: {
+            dark: '#000000ff',
+            light: '#ffffffff'
+          }
+        });
         console.log("QR Code updated. Scan this code to log in.");
       } catch (err) {
         console.error("Failed to generate QR Code Data URL:", err);

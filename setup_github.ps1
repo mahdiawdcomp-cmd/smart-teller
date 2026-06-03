@@ -1,18 +1,18 @@
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   أداة رفع مشروع حساب الصراف الذكي إلى GitHub   " -ForegroundColor Green
+Write-Host "   Smart Teller - Push Code to GitHub Tool        " -ForegroundColor Green
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Check if git is initialized
 if (!(Test-Path .git)) {
-    Write-Host "❌ نظام Git غير مهيأ في هذا المجلد." -ForegroundColor Red
+    Write-Host "Error: Git is not initialized in this directory." -ForegroundColor Red
     Exit
 }
 
 # Prompt user for GitHub URL
-$repoUrl = Read-Host "⌨️ يرجى لصق رابط مستودع GitHub الخاص بك (مثلاً: https://github.com/username/repo-name.git)"
+$repoUrl = Read-Host "Enter your GitHub repository URL (e.g. https://github.com/username/repo-name.git)"
 if ([string]::IsNullOrWhiteSpace($repoUrl)) {
-    Write-Host "❌ لم تقم بإدخال رابط المستودع." -ForegroundColor Red
+    Write-Host "Error: Repository URL is empty." -ForegroundColor Red
     Exit
 }
 
@@ -21,7 +21,7 @@ try {
     $originExists = git remote get-url origin 2>$null
     if ($originExists) {
         git remote remove origin
-        Write-Host "ℹ️ تم تحديث رابط المستودع السابق..." -ForegroundColor Yellow
+        Write-Host "Updating repository URL..." -ForegroundColor Yellow
     }
     
     # Add remote and rename branch
@@ -29,21 +29,21 @@ try {
     git branch -M main
     
     Write-Host ""
-    Write-Host "🚀 جاري رفع الكود إلى GitHub..." -ForegroundColor Yellow
-    Write-Host "ملاحظة: إذا لم تقم بتسجيل الدخول مسبقاً، قد تظهر لك نافذة من المتصفح لتأكيد هويتك على GitHub." -ForegroundColor Gray
+    Write-Host "Pushing code to GitHub..." -ForegroundColor Yellow
+    Write-Host "Note: If not logged in, a browser window will open to authenticate GitHub." -ForegroundColor Gray
     
     git push -u origin main
     
     Write-Host ""
     Write-Host "==================================================" -ForegroundColor Green
-    Write-Host "✅ تم رفع الكود بنجاح إلى مستودعك السحابي على GitHub!" -ForegroundColor Green
+    Write-Host "Success: Code pushed successfully to GitHub!" -ForegroundColor Green
     Write-Host "==================================================" -ForegroundColor Green
-    Write-Host "الخطوة القادمة هي الذهاب لموقع Render.com وربط المستودع لتشغيل الموقع مجاناً." -ForegroundColor Cyan
+    Write-Host "Next step: Go to Render.com and connect your repository." -ForegroundColor Cyan
 }
 catch {
     Write-Host ""
-    Write-Host "❌ حدث خطأ أثناء الرفع. يرجى التأكد من:" -ForegroundColor Red
-    Write-Host "1. أنك أنشأت مستودعاً فارغاً (Empty Repository) على موقع GitHub بنفس الاسم." -ForegroundColor Red
-    Write-Host "2. أن جهازك متصل بالإنترنت." -ForegroundColor Red
-    Write-Host "3. أن لديك صلاحية الوصول والكتابة للمستودع المحدد." -ForegroundColor Red
+    Write-Host "Error occurred during push. Please check:" -ForegroundColor Red
+    Write-Host "1. You created an empty repository on GitHub." -ForegroundColor Red
+    Write-Host "2. Your internet connection is active." -ForegroundColor Red
+    Write-Host "3. You have write permissions to the repository." -ForegroundColor Red
 }

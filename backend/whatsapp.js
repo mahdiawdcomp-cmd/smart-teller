@@ -124,9 +124,9 @@ async function connectToWhatsApp() {
 
   sock = makeWASocket({
     auth: authState,
-    printQRInTerminal: true,
+    printQRInTerminal: false,
     logger,
-    browser: ['Smart Teller Client', 'Safari', '3.0']
+    browser: ['Chrome (Linux)', 'Chrome', '100.0.0']
   });
 
   // Handle credentials update
@@ -244,6 +244,31 @@ async function sendTextMessage(phoneNumber, text) {
 }
 
 // --- Check and initialize WhatsApp connection on startup ---
+async function requestPairingCodeForPhone(phoneNumber) {
+  if (!sock) {
+    throw new Error('سيرفر الواتساب غير جاهز بعد، يرجى المحاولة بعد قليل.');
+  }
+  if (connectionState === 'connected') {
+    throw new Error('الواتساب متصل بالفعل!');
+  }
+
+  // Format phone number to E.164 (e.g. 9647701234567)
+  let cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+  if (!cleanNumber.startsWith('964') && cleanNumber.startsWith('0')) {
+    cleanNumber = '964' + cleanNumber.substring(1);
+  } else if (!cleanNumber.startsWith('964')) {
+    cleanNumber = '964' + cleanNumber;
+  }
+
+  try {
+    const code = await sock.requestPairingCode(cleanNumber);
+    return code;
+  } catch (err) {
+    console.error("Error requesting pairing code from Baileys:", err);
+    throw new Error(`فشل طلب الكود: ${err.message}`);
+  }
+}
+
 setTimeout(() => {
   connectToWhatsApp().catch(err => console.error("Error starting WhatsApp bot:", err));
 }, 1000);
@@ -255,6 +280,7 @@ module.exports = {
   }),
   sendStatementPDF,
   sendTextMessage,
+  requestPairingCodeForPhone,
   logoutWhatsApp: async () => {
     if (sock) {
       try {

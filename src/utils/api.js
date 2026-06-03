@@ -85,6 +85,19 @@ export const api = {
     return res.json();
   },
 
+  pairPhone: async (phoneNumber) => {
+    const res = await fetch(`${API_BASE}/whatsapp/pair-phone`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phoneNumber })
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'فشل طلب رمز الربط');
+    }
+    return res.json();
+  },
+
   sendStatement: async (statementData) => {
     const res = await fetch(`${API_BASE}/whatsapp/send-statement`, {
       method: 'POST',

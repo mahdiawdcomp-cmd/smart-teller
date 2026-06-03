@@ -16,7 +16,7 @@ app.use(express.json());
 const { db } = require('./firebaseAdmin');
 
 // Import WhatsApp bot module
-const { getWhatsAppStatus, sendStatementPDF, logoutWhatsApp } = require('./whatsapp');
+const { getWhatsAppStatus, sendStatementPDF, logoutWhatsApp, requestPairingCodeForPhone } = require('./whatsapp');
 
 // Import background scheduler
 require('./scheduler');
@@ -282,6 +282,20 @@ app.get('/api/profits', async (req, res) => {
 // 9. Get WhatsApp connection status and QR code
 app.get('/api/whatsapp/status', (req, res) => {
   res.json(getWhatsAppStatus());
+});
+
+// Request pairing code via phone number
+app.post('/api/whatsapp/pair-phone', async (req, res) => {
+  try {
+    const { phoneNumber } = req.body;
+    if (!phoneNumber) {
+      return res.status(400).json({ error: 'PhoneNumber is required' });
+    }
+    const code = await requestPairingCodeForPhone(phoneNumber);
+    res.json({ success: true, code });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // 10. Disconnect/Logout WhatsApp

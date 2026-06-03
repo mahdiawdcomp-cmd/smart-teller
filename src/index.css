@@ -1,0 +1,518 @@
+@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap');
+
+:root {
+  --primary: #0891b2;         /* Deep Teal */
+  --primary-hover: #0e7490;
+  --secondary: #0f766e;       /* Emerald Teal */
+  --accent: #d97706;          /* Deep Amber for warnings/notes */
+  --bg-main: #f8fafc;         /* Light slate */
+  --bg-card: #ffffff;
+  --text-dark: #0f172a;       /* Slate 900 - very high contrast */
+  --text-muted: #475569;      /* Slate 600 */
+  --border: #cbd5e1;          /* High contrast borders */
+  --success: #16a34a;         /* High visibility green */
+  --danger: #dc2626;          /* High visibility red */
+  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  
+  font-family: 'Tajawal', sans-serif;
+  direction: rtl;
+  text-align: right;
+  background-color: var(--bg-main);
+  color: var(--text-dark);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  font-size: 20px; /* Larger base font size for elderly readability */
+  line-height: 1.6;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+
+/* App Header Styling */
+.app-header {
+  background-color: var(--text-dark);
+  color: #ffffff;
+  padding: 1rem 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: var(--shadow);
+}
+
+.logo-section {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.logo-section h1 {
+  font-size: 28px;
+  font-weight: 900;
+  margin: 0;
+  letter-spacing: 0.5px;
+}
+
+.logo-icon {
+  width: 42px;
+  height: 42px;
+  background-color: var(--primary);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Main Container Layout */
+.main-container {
+  flex: 1;
+  max-width: 1200px;
+  width: 95%;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+/* Grid Cards Layout */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.stat-card {
+  background-color: var(--bg-card);
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  padding: 1.5rem;
+  box-shadow: var(--shadow);
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+.stat-icon {
+  width: 60px;
+  height: 60px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stat-info h3 {
+  font-size: 16px;
+  color: var(--text-muted);
+  margin: 0 0 0.25rem 0;
+  font-weight: 500;
+}
+
+.stat-info p {
+  font-size: 26px;
+  font-weight: 900;
+  margin: 0;
+  color: var(--text-dark);
+}
+
+/* Custom Tabs navigation */
+.tabs-nav {
+  display: flex;
+  background-color: #f1f5f9;
+  padding: 0.5rem;
+  border-radius: 12px;
+  gap: 0.5rem;
+  margin-bottom: 2rem;
+  border: 1px solid var(--border);
+}
+
+.tab-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  padding: 0.75rem 1rem;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 8px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.tab-btn.active {
+  background-color: var(--primary);
+  color: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+/* UI Panel Container */
+.panel-card {
+  background-color: var(--bg-card);
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  padding: 2rem;
+  box-shadow: var(--shadow);
+  margin-bottom: 2rem;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  border-bottom: 2px solid var(--bg-main);
+  padding-bottom: 1rem;
+}
+
+.panel-header h2 {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-dark);
+}
+
+/* Forms layout - large targets for elderly */
+.form-group {
+  margin-bottom: 1.5rem;
+}
+
+.form-group label {
+  display: block;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  color: var(--text-dark);
+}
+
+.form-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.85rem 1rem;
+  font-size: 20px;
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.form-row {
+  display: flex;
+  gap: 1.5rem;
+}
+
+.form-row .form-group {
+  flex: 1;
+}
+
+/* Buttons - large click targets */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.85rem 1.5rem;
+  font-size: 20px;
+  font-weight: 700;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 0.2s, transform 0.1s;
+  box-shadow: var(--shadow);
+  font-family: inherit;
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn-primary {
+  background-color: var(--primary);
+  color: #ffffff;
+}
+
+.btn-primary:hover {
+  background-color: var(--primary-hover);
+}
+
+.btn-success {
+  background-color: var(--success);
+  color: #ffffff;
+}
+
+.btn-success:hover {
+  background-color: #15803d;
+}
+
+.btn-danger {
+  background-color: var(--danger);
+  color: #ffffff;
+}
+
+.btn-danger:hover {
+  background-color: #b91c1c;
+}
+
+.btn-secondary {
+  background-color: #64748b;
+  color: #ffffff;
+}
+
+.btn-secondary:hover {
+  background-color: #475569;
+}
+
+.btn-block {
+  display: flex;
+  width: 100%;
+}
+
+/* Table Design */
+.table-wrapper {
+  overflow-x: auto;
+  border-radius: 12px;
+  border: 2px solid var(--border);
+  margin-top: 1rem;
+}
+
+.app-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: right;
+}
+
+.app-table th {
+  background-color: #f1f5f9;
+  color: var(--text-dark);
+  font-weight: 700;
+  padding: 1rem;
+  border-bottom: 2px solid var(--border);
+}
+
+.app-table td {
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 18px;
+}
+
+.app-table tr:hover {
+  background-color: #f8fafc;
+}
+
+/* Badges for status */
+.badge {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.badge-deposit {
+  background-color: rgba(22, 163, 74, 0.15);
+  color: var(--success);
+}
+
+.badge-withdrawal {
+  background-color: rgba(220, 38, 38, 0.15);
+  color: var(--danger);
+}
+
+/* Customer ledger filters */
+.ledger-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  background-color: #f8fafc;
+  padding: 1rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+/* Authentication Page layout */
+.login-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 80vh;
+}
+
+.login-card {
+  max-width: 450px;
+  width: 90%;
+  padding: 2.5rem;
+  border: 2px solid var(--border);
+  border-radius: 20px;
+  background-color: var(--bg-card);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+
+.login-card h2 {
+  font-size: 28px;
+  font-weight: 900;
+  margin-bottom: 0.5rem;
+}
+
+/* Dialog / Modal popup styling */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(15, 23, 42, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background-color: var(--bg-card);
+  border-radius: 20px;
+  padding: 2rem;
+  max-width: 500px;
+  width: 90%;
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-lg);
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+/* Search bar styling */
+.search-wrapper {
+  position: relative;
+  margin-bottom: 1.5rem;
+}
+
+.search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.85rem 1rem 0.85rem 3rem;
+  font-size: 20px;
+  border: 2px solid var(--border);
+  border-radius: 10px;
+}
+
+/* QR Code Section for WhatsApp Setup */
+.qr-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.qr-box {
+  width: 256px;
+  height: 256px;
+  border: 3px solid var(--primary);
+  border-radius: 16px;
+  padding: 1rem;
+  background-color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qr-box img {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+  font-size: 20px;
+}
+
+.indicator-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+}
+
+.indicator-dot.connected {
+  background-color: var(--success);
+}
+
+.indicator-dot.connecting {
+  background-color: var(--accent);
+  animation: pulse 1.5s infinite;
+}
+
+.indicator-dot.disconnected {
+  background-color: var(--danger);
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.2); opacity: 0.5; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* Quick alerts/toasts */
+.toast {
+  padding: 1rem 1.5rem;
+  border-radius: 10px;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid transparent;
+}
+
+.toast-success {
+  background-color: rgba(22, 163, 74, 0.12);
+  color: var(--success);
+  border-color: rgba(22, 163, 74, 0.3);
+}
+
+.toast-error {
+  background-color: rgba(220, 38, 38, 0.12);
+  color: var(--danger);
+  border-color: rgba(220, 38, 38, 0.3);
+}
+
+/* Footer style */
+.app-footer {
+  text-align: center;
+  padding: 1.5rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  font-size: 16px;
+  background-color: #f8fafc;
+  margin-top: auto;
+}

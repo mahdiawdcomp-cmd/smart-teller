@@ -126,7 +126,8 @@ async function connectToWhatsApp() {
     auth: authState,
     printQRInTerminal: false,
     logger,
-    browser: ['Chrome (Linux)', 'Chrome', '100.0.0']
+    browser: ['Chrome (Linux)', 'Chrome', '100.0.0'],
+    shouldSyncHistoryMessage: () => false
   });
 
   // Handle credentials update

@@ -516,3 +516,81 @@ body {
   background-color: #f8fafc;
   margin-top: auto;
 }
+
+/* --- RESPONSIVE MEDIA QUERIES (Mobile, iPad, PC) --- */
+@media (max-width: 768px) {
+  body {
+    font-size: 18px; /* Slightly scale down for smaller mobile screens */
+  }
+  
+  .app-header {
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem;
+    text-align: center;
+  }
+  
+  .logo-section {
+    width: 100%;
+    justify-content: center;
+  }
+  
+  .tabs-nav {
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.5rem;
+  }
+  
+  .tab-btn {
+    font-size: 18px;
+    padding: 0.6rem;
+    width: 100%;
+  }
+  
+  .dashboard-grid {
+    grid-template-columns: 1fr !important; /* Force single column on phones */
+    gap: 1rem;
+  }
+  
+  .panel-card {
+    padding: 1.25rem;
+    border-radius: 12px;
+  }
+  
+  .panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+  
+  .form-row {
+    flex-direction: column;
+    gap: 0;
+  }
+  
+  .btn {
+    width: 100%; /* Make buttons large and easy to tap with fingers */
+    padding: 0.85rem;
+    font-size: 18px;
+    display: flex;
+    justify-content: center;
+  }
+  
+  .modal-content {
+    padding: 1.5rem;
+    width: 95%;
+  }
+  
+  .ledger-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1rem;
+  }
+}
+
+/* Medium devices (Tablets, iPads) */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}

@@ -2,6 +2,18 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../utils/api';
 import { PlusCircle, Trash2, DollarSign, Wallet, Percent, TrendingUp } from 'lucide-react';
 
+const formatNumberWithCommas = (val) => {
+  if (!val) return '';
+  const cleanVal = val.toString().replace(/[^0-9]/g, '');
+  if (!cleanVal) return '';
+  return Number(cleanVal).toLocaleString('en-US');
+};
+
+const parseRawNumber = (val) => {
+  if (!val) return 0;
+  return parseFloat(val.toString().replace(/,/g, '')) || 0;
+};
+
 export default function Expenses() {
   const [expenses, setExpenses] = useState([]);
   const [profits, setProfits] = useState({ totalCustomerProfit: 0, totalExpenses: 0, netProfit: 0 });
@@ -35,10 +47,16 @@ export default function Expenses() {
       return;
     }
 
+    const rawAmount = parseRawNumber(amount);
+    if (rawAmount <= 0) {
+      setMessage('يرجى إدخال مبلغ صحيح أكبر من الصفر');
+      return;
+    }
+
     setLoading(true);
     setMessage('');
     try {
-      await api.addExpense(title, amount, notes);
+      await api.addExpense(title, rawAmount, notes);
       setTitle('');
       setAmount('');
       setNotes('');
@@ -140,13 +158,12 @@ export default function Expenses() {
             <div className="form-group">
               <label>مبلغ المصروف (بالدينار العراقي) *</label>
               <input
-                type="number"
+                type="text"
                 className="form-input"
                 placeholder="0"
                 value={amount}
-                onChange={e => setAmount(e.target.value)}
+                onChange={e => setAmount(formatNumberWithCommas(e.target.value))}
                 required
-                min="0"
               />
             </div>
 
@@ -199,7 +216,7 @@ export default function Expenses() {
                       </td>
                       <td style={{ fontSize: '16px', color: 'var(--text-muted)' }}>{exp.notes || '-'}</td>
                       <td style={{ fontSize: '14px' }}>
-                        {new Date(exp.date).toLocaleDateString('ar-EG')}
+                        {new Date(exp.date).toLocaleDateString('en-US')}
                       </td>
                       <td style={{ textAlign: 'center' }}>
                         <button

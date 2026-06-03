@@ -62,8 +62,8 @@ async function sendWeeklyStatements() {
       if (weeklyTransactions.length > 0) {
         console.log(`[Scheduler] Generating weekly statement for ${customer.name}...`);
 
-        const todayStr = new Date().toLocaleDateString('ar-EG');
-        const lastWeekStr = oneWeekAgo.toLocaleDateString('ar-EG');
+        const todayStr = new Date().toLocaleDateString('en-US');
+        const lastWeekStr = oneWeekAgo.toLocaleDateString('en-US');
         const periodText = `من ${lastWeekStr} إلى ${todayStr}`;
 
         // Generate PDF base64

@@ -88,7 +88,7 @@ function generatePdfBase64(customerName, transactions, periodText, balance) {
       doc.text(bidiText(`اسم الزبون: ${customerName}`), 70, 125, { align: 'right', width: 450 });
       
       // Balance formatting
-      const formattedBalance = Number(balance).toLocaleString('ar-EG') + ' د.ع';
+      const formattedBalance = Number(balance).toLocaleString('en-US') + ' د.ع';
       doc.text(bidiText(`الرصيد الحالي: ${formattedBalance}`), 70, 145, { align: 'right', width: 450 });
 
       doc.moveDown(3);

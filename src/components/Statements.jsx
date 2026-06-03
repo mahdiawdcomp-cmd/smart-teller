@@ -50,11 +50,11 @@ export default function Statements({ customer, onBack }) {
     const now = new Date();
     if (filter === 'all') return 'كامل المدة الحسابية';
     if (filter === 'month') {
-      return `شهر ${now.toLocaleString('ar-EG', { month: 'long' })} ${now.getFullYear()}`;
+      return `شهر ${now.toLocaleString('ar-EG-u-nu-latn', { month: 'long' })} ${now.getFullYear()}`;
     }
     if (filter === 'prev_month') {
       const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      return `الشهر السابق: ${prev.toLocaleString('ar-EG', { month: 'long' })} ${prev.getFullYear()}`;
+      return `الشهر السابق: ${prev.toLocaleString('ar-EG-u-nu-latn', { month: 'long' })} ${prev.getFullYear()}`;
     }
     if (filter === 'custom') {
       return `من ${startDate || 'البداية'} إلى ${endDate || 'اليوم'}`;
@@ -190,23 +190,48 @@ export default function Statements({ customer, onBack }) {
       )}
 
       {/* Stats Summary for Period */}
-      <div className="dashboard-grid" style={{ marginBottom: '1.5rem' }}>
-        <div className="stat-card" style={{ padding: '1rem' }}>
+      <div className="dashboard-grid" style={{ marginBottom: '1.5rem', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+        <div className="stat-card" style={{ padding: '1.25rem 1rem' }}>
           <div className="stat-info">
-            <h3>مجموع المقبوضات (إيداعاته)</h3>
-            <p style={{ color: 'var(--success)', fontSize: '20px' }}>{totalDeposits.toLocaleString('en-US')} د.ع</p>
+            <h3>مجموع المقبوضات (له)</h3>
+            <p style={{ color: 'var(--success)', fontSize: '22px', fontWeight: 'bold' }}>
+              {totalDeposits.toLocaleString('en-US')} د.ع
+            </p>
           </div>
         </div>
-        <div className="stat-card" style={{ padding: '1rem' }}>
+        <div className="stat-card" style={{ padding: '1.25rem 1rem' }}>
           <div className="stat-info">
-            <h3>مجموع المسحوبات (حوالاته)</h3>
-            <p style={{ color: 'var(--danger)', fontSize: '20px' }}>{totalWithdrawals.toLocaleString('en-US')} د.ع</p>
+            <h3>مجموع المسحوبات (عليه)</h3>
+            <p style={{ color: 'var(--danger)', fontSize: '22px', fontWeight: 'bold' }}>
+              {totalWithdrawals.toLocaleString('en-US')} د.ع
+            </p>
           </div>
         </div>
-        <div className="stat-card" style={{ padding: '1rem' }}>
+        <div className="stat-card" style={{ padding: '1.25rem 1rem' }}>
           <div className="stat-info">
             <h3>أرباح الصراف من الزبون</h3>
-            <p style={{ color: 'var(--primary)', fontSize: '20px' }}>{customerProfit.toLocaleString('en-US')} د.ع</p>
+            <p style={{ color: 'var(--primary)', fontSize: '22px', fontWeight: 'bold' }}>
+              {customerProfit.toLocaleString('en-US')} د.ع
+            </p>
+          </div>
+        </div>
+        <div className="stat-card" style={{ 
+          padding: '1.25rem 1rem', 
+          border: `2px solid ${(customer.balance || 0) >= 0 ? 'var(--success)' : 'var(--danger)'}`,
+          backgroundColor: (customer.balance || 0) >= 0 ? 'rgba(22, 163, 74, 0.02)' : 'rgba(220, 38, 38, 0.02)'
+        }}>
+          <div className="stat-info">
+            <h3>الرصيد الفعلي الحالي</h3>
+            <p style={{ 
+              color: (customer.balance || 0) >= 0 ? 'var(--success)' : 'var(--danger)', 
+              fontSize: '22px', 
+              fontWeight: '900' 
+            }}>
+              {Number(customer.balance || 0).toLocaleString('en-US')} د.ع
+              <span style={{ fontSize: '14px', marginRight: '5px', fontWeight: 'bold' }}>
+                ({(customer.balance || 0) >= 0 ? 'له' : 'عليه'})
+              </span>
+            </p>
           </div>
         </div>
       </div>

@@ -3,6 +3,18 @@ import { api } from '../utils/api';
 import { ArrowLeftRight, X, ShieldAlert } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
+const formatNumberWithCommas = (val) => {
+  if (!val) return '';
+  const cleanVal = val.toString().replace(/[^0-9]/g, '');
+  if (!cleanVal) return '';
+  return Number(cleanVal).toLocaleString('en-US');
+};
+
+const parseRawNumber = (val) => {
+  if (!val) return 0;
+  return parseFloat(val.toString().replace(/,/g, '')) || 0;
+};
+
 export default function TransactionForm({ customer, onClose, onSuccess }) {
   const [type, setType] = useState('deposit'); // 'deposit' | 'withdrawal'
   const [amount, setAmount] = useState('');
@@ -16,7 +28,10 @@ export default function TransactionForm({ customer, onClose, onSuccess }) {
     e.preventDefault();
     setError('');
 
-    if (!amount || parseFloat(amount) <= 0) {
+    const rawAmount = parseRawNumber(amount);
+    const rawCommission = parseRawNumber(commission);
+
+    if (rawAmount <= 0) {
       setError('يرجى إدخال مبلغ صحيح أكبر من الصفر');
       return;
     }
@@ -30,8 +45,8 @@ export default function TransactionForm({ customer, onClose, onSuccess }) {
     try {
       const transactionData = {
         type,
-        amount: parseFloat(amount),
-        commission: parseFloat(commission) || 0,
+        amount: rawAmount,
+        commission: type === 'deposit' ? 0 : rawCommission,
         notes: notes || ''
       };
 
@@ -54,7 +69,7 @@ export default function TransactionForm({ customer, onClose, onSuccess }) {
   // Convert numbers to readable format for the elderly
   const getReadableAmountText = () => {
     if (!amount) return '0 دينار عراقي';
-    return Number(amount).toLocaleString('ar-EG') + ' دينار عراقي';
+    return amount + ' دينار عراقي';
   };
 
   return (
@@ -145,14 +160,13 @@ export default function TransactionForm({ customer, onClose, onSuccess }) {
           <div className="form-group">
             <label style={{ fontSize: '20px' }}>المبلغ بالدينار العراقي *</label>
             <input
-              type="number"
+              type="text"
               className="form-input"
               style={{ fontSize: '26px', fontWeight: 'bold', letterSpacing: '0.5px' }}
               placeholder="0"
               value={amount}
-              onChange={e => setAmount(e.target.value)}
+              onChange={e => setAmount(formatNumberWithCommas(e.target.value))}
               required
-              min="1"
             />
             {/* Big readable text for amount confirmation */}
             {amount && (
@@ -177,12 +191,11 @@ export default function TransactionForm({ customer, onClose, onSuccess }) {
             <div className="form-group">
               <label>عمولة الصراف (أرباحك من هذه العملية) *</label>
               <input
-                type="number"
+                type="text"
                 className="form-input"
                 placeholder="0"
                 value={commission}
-                onChange={e => setCommission(e.target.value)}
-                min="0"
+                onChange={e => setCommission(formatNumberWithCommas(e.target.value))}
               />
             </div>
           )}

@@ -3,13 +3,28 @@ const path = require('path');
 const { ArabicShaper } = require('arabic-persian-reshaper');
 
 // Font paths
-const fontRegular = path.join(__dirname, '..', 'fonts', 'Tajawal-Regular.ttf');
-const fontBold = path.join(__dirname, '..', 'fonts', 'Tajawal-Bold.ttf');
+const fontRegular = path.join(__dirname, '..', 'fonts', 'Amiri-Regular.ttf');
+const fontBold = path.join(__dirname, '..', 'fonts', 'Amiri-Bold.ttf');
 
 // Helper to check if a character is Arabic
 function isArabicChar(char) {
   const code = char.charCodeAt(0);
   return (code >= 0x0600 && code <= 0x06FF) || (code >= 0x0750 && code <= 0x077F) || (code >= 0x08A0 && code <= 0x08FF) || (code >= 0xFB50 && code <= 0xFDFF) || (code >= 0xFE70 && code <= 0xFEFF);
+}
+
+// Reverses a string while mirroring parentheses and brackets
+function reverseString(str) {
+  return str.split('').reverse().map(char => {
+    if (char === '(') return ')';
+    if (char === ')') return '(';
+    if (char === '[') return ']';
+    if (char === ']') return '[';
+    if (char === '{') return '}';
+    if (char === '}') return '{';
+    if (char === '<') return '>';
+    if (char === '>') return '<';
+    return char;
+  }).join('');
 }
 
 // Reshapes and reverses Arabic text, keeping numbers and English words left-to-right
@@ -32,8 +47,8 @@ function bidiText(text) {
     }
     
     if (hasArabic) {
-      // Reverse Arabic word so it displays correctly RTL in PDFkit
-      return word.split('').reverse().join('');
+      // Reverse Arabic word so it displays correctly RTL in PDFkit, swapping brackets/parentheses
+      return reverseString(word);
     } else {
       // Keep numbers/English left-to-right
       return word;
@@ -71,11 +86,11 @@ function generatePdfBase64(customerName, transactions, periodText, balance, open
       });
 
       // Register Arabic fonts
-      doc.registerFont('Tajawal', fontRegular);
-      doc.registerFont('Tajawal-Bold', fontBold);
+      doc.registerFont('Amiri', fontRegular);
+      doc.registerFont('Amiri-Bold', fontBold);
 
       // Title
-      doc.font('Tajawal-Bold')
+      doc.font('Amiri-Bold')
          .fillColor('#0f172a')
          .fontSize(22)
          .text(bidiText('كشف حساب الصراف الذكي 🏦'), { align: 'center' });
@@ -83,7 +98,7 @@ function generatePdfBase64(customerName, transactions, periodText, balance, open
       doc.moveDown(0.3);
       
       // Subtitle / Period
-      doc.font('Tajawal')
+      doc.font('Amiri')
          .fillColor('#475569')
          .fontSize(12)
          .text(bidiText(`تاريخ الكشف: ${periodText}`), { align: 'center' });
@@ -94,7 +109,7 @@ function generatePdfBase64(customerName, transactions, periodText, balance, open
       doc.rect(50, 110, 495, 55).fillAndStroke('#f8fafc', '#cbd5e1');
       doc.fillColor('#0f172a');
 
-      doc.font('Tajawal-Bold').fontSize(11);
+      doc.font('Amiri-Bold').fontSize(11);
       doc.text(bidiText(`اسم الزبون: ${customerName}`), 70, 122, { align: 'right', width: 450 });
       
       const formattedBalance = Number(balance).toLocaleString('en-US') + ' د.ع';
@@ -107,7 +122,7 @@ function generatePdfBase64(customerName, transactions, periodText, balance, open
       doc.rect(50, tableTop, 495, 25).fill('#334155');
 
       // Headers (RTL columns: الرصيد | له (مسدد) | عليه (مطلوب) | الملاحظات | التاريخ)
-      doc.fillColor('#ffffff').font('Tajawal-Bold').fontSize(10);
+      doc.fillColor('#ffffff').font('Amiri-Bold').fontSize(10);
       doc.text(bidiText('الرصيد'), 50, tableTop + 7, { width: 95, align: 'center' });
       doc.text(bidiText('له (مسدد)'), 145, tableTop + 7, { width: 85, align: 'center' });
       doc.text(bidiText('عليه (مطلوب)'), 230, tableTop + 7, { width: 85, align: 'center' });
@@ -117,7 +132,7 @@ function generatePdfBase64(customerName, transactions, periodText, balance, open
       // Draw Opening Balance Row (رصيد سابق)
       let y = tableTop + 25;
       doc.rect(50, y, 495, 22).fill('#f1f5f9');
-      doc.fillColor('#475569').font('Tajawal-Bold').fontSize(10);
+      doc.fillColor('#475569').font('Amiri-Bold').fontSize(10);
       
       const opBalStr = Number(opBal).toLocaleString('en-US') + ' د.ع';
       doc.text(bidiText(opBalStr), 50, y + 6, { width: 95, align: 'center' });
@@ -129,7 +144,7 @@ function generatePdfBase64(customerName, transactions, periodText, balance, open
       y += 22;
 
       // Table Rows for Transactions
-      doc.font('Tajawal').fontSize(9);
+      doc.font('Amiri').fontSize(9);
 
       (transactions || []).forEach((tx, idx) => {
         // Alternating row background
@@ -182,7 +197,7 @@ function generatePdfBase64(customerName, transactions, periodText, balance, open
       // Draw Final Summary Box
       y += 10;
       doc.rect(50, y, 495, 30).fill('#f1f5f9').stroke('#cbd5e1');
-      doc.fillColor('#0f172a').font('Tajawal-Bold').fontSize(11);
+      doc.fillColor('#0f172a').font('Amiri-Bold').fontSize(11);
       
       const finBalStr = Number(finBal).toLocaleString('en-US') + ' د.ع';
       const labelText = `الرصيد النهائي للمرحلة المحددة: ${finBalStr} (${finBal >= 0 ? 'له' : 'عليه'})`;

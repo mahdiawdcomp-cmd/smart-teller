@@ -284,6 +284,40 @@ app.get('/api/whatsapp/status', (req, res) => {
   res.json(getWhatsAppStatus());
 });
 
+// Diagnostics endpoint to debug connection issues
+app.get('/api/whatsapp/diagnostics', async (req, res) => {
+  const diag = {
+    firebaseConfigured: !!db,
+    firestoreTest: null,
+    whatsappStatus: getWhatsAppStatus(),
+    sessionFilesCount: 0
+  };
+
+  if (db) {
+    try {
+      const testRef = db.collection('diagnostics_test').doc('ping');
+      await testRef.set({ timestamp: new Date().toISOString() });
+      const doc = await testRef.get();
+      diag.firestoreTest = doc.exists ? 'success' : 'failed_to_read';
+      await testRef.delete();
+    } catch (e) {
+      diag.firestoreTest = `error: ${e.message}`;
+    }
+  }
+
+  try {
+    const sessionDir = path.join(__dirname, 'data', 'whatsapp_session');
+    if (await fs.pathExists(sessionDir)) {
+      const files = await fs.readdir(sessionDir);
+      diag.sessionFilesCount = files.length;
+    }
+  } catch (e) {
+    diag.sessionFilesCount = `error: ${e.message}`;
+  }
+
+  res.json(diag);
+});
+
 // Request pairing code via phone number
 app.post('/api/whatsapp/pair-phone', async (req, res) => {
   try {

@@ -71,17 +71,79 @@ export default function Statements({ customer, onBack }) {
     downloadLink.click();
   };
 
+  // Helper to construct the chronological PDF payload with running balances
+  const getPdfPayload = () => {
+    if (!customer || !customer.transactions) return null;
+    
+    // Reverse array to sort oldest to newest (chronological order)
+    const chronologicalTxs = [...customer.transactions].reverse();
+    
+    let currentBal = 0;
+    const txsWithBal = chronologicalTxs.map(tx => {
+      const change = tx.type === 'deposit' ? tx.amount : -(tx.amount + (tx.commission || 0));
+      currentBal += change;
+      return { ...tx, runningBalance: currentBal };
+    });
+    
+    let filteredWithBal = [...txsWithBal];
+    const now = new Date();
+    if (filter === 'month') {
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      filteredWithBal = filteredWithBal.filter(t => new Date(t.date) >= startOfMonth);
+    } else if (filter === 'prev_month') {
+      const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const endOfPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+      filteredWithBal = filteredWithBal.filter(t => {
+        const d = new Date(t.date);
+        return d >= startOfPrevMonth && d <= endOfPrevMonth;
+      });
+    } else if (filter === 'custom') {
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        filteredWithBal = filteredWithBal.filter(t => new Date(t.date) >= start);
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filteredWithBal = filteredWithBal.filter(t => new Date(t.date) <= end);
+      }
+    }
+    
+    let openingBalance = 0;
+    if (filteredWithBal.length > 0) {
+      const firstFilteredTx = filteredWithBal[0];
+      const firstIdx = txsWithBal.findIndex(t => t.id === firstFilteredTx.id);
+      if (firstIdx > 0) {
+        openingBalance = txsWithBal[firstIdx - 1].runningBalance;
+      }
+    } else {
+      openingBalance = customer.balance;
+    }
+    
+    const finalBalance = filteredWithBal.length > 0 
+      ? filteredWithBal[filteredWithBal.length - 1].runningBalance 
+      : openingBalance;
+      
+    return {
+      customerName: customer.name,
+      transactions: filteredWithBal,
+      openingBalance,
+      finalBalance,
+      periodText: getPeriodText(),
+      balance: customer.balance
+    };
+  };
+
   // 1. Download PDF locally
   const handleDownloadPdf = async () => {
     setLoadingPdf(true);
     setStatusMessage('');
     try {
-      const res = await api.generatePdf({
-        customerName: customer.name,
-        transactions: filteredTransactions,
-        periodText: getPeriodText(),
-        balance: customer.balance
-      });
+      const payload = getPdfPayload();
+      if (!payload) return;
+
+      const res = await api.generatePdf(payload);
       
       const filename = `كشف_حساب_${customer.name.replace(/\s+/g, '_')}_${filter}.pdf`;
       triggerDownload(res.pdfBase64, filename);
@@ -106,13 +168,11 @@ export default function Statements({ customer, onBack }) {
     setLoadingSend(true);
     setStatusMessage('');
     try {
+      const payload = getPdfPayload();
+      if (!payload) return;
+
       // 1. Generate PDF
-      const pdfRes = await api.generatePdf({
-        customerName: customer.name,
-        transactions: filteredTransactions,
-        periodText: getPeriodText(),
-        balance: customer.balance
-      });
+      const pdfRes = await api.generatePdf(payload);
 
       // 2. Send via WhatsApp Bot API
       await api.sendStatement({

@@ -45,7 +45,20 @@ function bidiText(text) {
 }
 
 // Generate PDF Statement (returns a Promise resolving to a base64 string)
-function generatePdfBase64(customerName, transactions, periodText, balance) {
+function generatePdfBase64(customerName, transactions, periodText, balance, openingBalance = 0, finalBalance = 0) {
+  let opBal = openingBalance;
+  let finBal = finalBalance;
+  
+  if (typeof customerName === 'object') {
+    const data = customerName;
+    customerName = data.customerName;
+    transactions = data.transactions || [];
+    periodText = data.periodText;
+    balance = data.balance || 0;
+    opBal = data.openingBalance || 0;
+    finBal = data.finalBalance || 0;
+  }
+
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({ margin: 50, size: 'A4' });
@@ -61,100 +74,119 @@ function generatePdfBase64(customerName, transactions, periodText, balance) {
       doc.registerFont('Tajawal', fontRegular);
       doc.registerFont('Tajawal-Bold', fontBold);
 
-      // Set Font to Bold for Header
-      doc.font('Tajawal-Bold');
-
       // Title
-      doc.fillColor('#2c3e50')
+      doc.font('Tajawal-Bold')
+         .fillColor('#0f172a')
          .fontSize(22)
-         .text(bidiText('كشف حساب الصراف الذكي'), { align: 'center' });
+         .text(bidiText('كشف حساب الصراف الذكي 🏦'), { align: 'center' });
       
-      doc.moveDown(0.5);
+      doc.moveDown(0.3);
       
       // Subtitle / Period
       doc.font('Tajawal')
-         .fillColor('#7f8c8d')
+         .fillColor('#475569')
          .fontSize(12)
-         .text(bidiText(`الفترة: ${periodText}`), { align: 'center' });
+         .text(bidiText(`تاريخ الكشف: ${periodText}`), { align: 'center' });
 
-      doc.moveDown(1.5);
+      doc.moveDown(1.2);
 
-      // Customer Details (RTL layout)
-      doc.rect(50, 110, 495, 60).fillAndStroke('#f8f9fa', '#e9ecef');
-      doc.fillColor('#2c3e50');
+      // Customer Details Card
+      doc.rect(50, 110, 495, 55).fillAndStroke('#f8fafc', '#cbd5e1');
+      doc.fillColor('#0f172a');
 
-      doc.font('Tajawal-Bold').fontSize(12);
-      // Label name and phone
-      doc.text(bidiText(`اسم الزبون: ${customerName}`), 70, 125, { align: 'right', width: 450 });
+      doc.font('Tajawal-Bold').fontSize(11);
+      doc.text(bidiText(`اسم الزبون: ${customerName}`), 70, 122, { align: 'right', width: 450 });
       
-      // Balance formatting
       const formattedBalance = Number(balance).toLocaleString('en-US') + ' د.ع';
-      doc.text(bidiText(`الرصيد الحالي: ${formattedBalance}`), 70, 145, { align: 'right', width: 450 });
+      doc.text(bidiText(`الرصيد الكلي الحالي للمكتب: ${formattedBalance}`), 70, 140, { align: 'right', width: 450 });
 
-      doc.moveDown(3);
-
-      // Table Header
-      const tableTop = 190;
-      doc.font('Tajawal-Bold').fontSize(11).fillColor('#ffffff');
+      // Table Header Configuration
+      const tableTop = 185;
       
       // Table Header Row Background
-      doc.rect(50, tableTop, 495, 25).fill('#34495e');
+      doc.rect(50, tableTop, 495, 25).fill('#334155');
 
-      // Table Headers (RTL columns: Notes | Commission | Amount | Type | Date)
-      // Columns configuration:
-      // Date: 120 width (50 to 170)
-      // Type: 80 width (170 to 250)
-      // Amount: 100 width (250 to 350)
-      // Commission: 80 width (350 to 430)
-      // Notes: 115 width (430 to 545)
-      
-      doc.text(bidiText('الملاحظات'), 360, tableTop + 6, { width: 185, align: 'center' });
-      doc.text(bidiText('المبلغ الإجمالي'), 250, tableTop + 6, { width: 110, align: 'center' });
-      doc.text(bidiText('العملية'), 170, tableTop + 6, { width: 80, align: 'center' });
-      doc.text(bidiText('التاريخ'), 50, tableTop + 6, { width: 120, align: 'center' });
+      // Headers (RTL columns: الرصيد | له (مسدد) | عليه (مطلوب) | الملاحظات | التاريخ)
+      doc.fillColor('#ffffff').font('Tajawal-Bold').fontSize(10);
+      doc.text(bidiText('الرصيد'), 50, tableTop + 7, { width: 95, align: 'center' });
+      doc.text(bidiText('له (مسدد)'), 145, tableTop + 7, { width: 85, align: 'center' });
+      doc.text(bidiText('عليه (مطلوب)'), 230, tableTop + 7, { width: 85, align: 'center' });
+      doc.text(bidiText('الملاحظات'), 315, tableTop + 7, { width: 120, align: 'center' });
+      doc.text(bidiText('التاريخ'), 435, tableTop + 7, { width: 110, align: 'center' });
 
-      // Table Rows
+      // Draw Opening Balance Row (رصيد سابق)
       let y = tableTop + 25;
-      doc.font('Tajawal').fontSize(10).fillColor('#2c3e50');
+      doc.rect(50, y, 495, 22).fill('#f1f5f9');
+      doc.fillColor('#475569').font('Tajawal-Bold').fontSize(10);
+      
+      const opBalStr = Number(opBal).toLocaleString('en-US') + ' د.ع';
+      doc.text(bidiText(opBalStr), 50, y + 6, { width: 95, align: 'center' });
+      doc.text(bidiText('-'), 145, y + 6, { width: 85, align: 'center' });
+      doc.text(bidiText('-'), 230, y + 6, { width: 85, align: 'center' });
+      doc.text(bidiText('رصيد سابق (افتتاحي)'), 315, y + 6, { width: 120, align: 'center' });
+      doc.text(bidiText('-'), 435, y + 6, { width: 110, align: 'center' });
+      
+      y += 22;
 
-      transactions.forEach((tx, idx) => {
+      // Table Rows for Transactions
+      doc.font('Tajawal').fontSize(9);
+
+      (transactions || []).forEach((tx, idx) => {
         // Alternating row background
         if (idx % 2 === 0) {
-          doc.rect(50, y, 495, 22).fill('#fdfdfd');
+          doc.rect(50, y, 495, 22).fill('#ffffff');
         } else {
-          doc.rect(50, y, 495, 22).fill('#f7f9fa');
+          doc.rect(50, y, 495, 22).fill('#f8fafc');
         }
         
-        doc.fillColor('#2c3e50');
+        doc.fillColor('#0f172a');
 
         const dateStr = new Date(tx.date).toLocaleDateString('en-US');
-        const typeStr = tx.type === 'deposit' ? 'إيداع (له)' : 'سحب (عليه)';
-        
-        const totalAmount = tx.amount + (tx.type === 'withdrawal' ? (tx.commission || 0) : 0);
-        const amountStr = Number(totalAmount).toLocaleString('en-US') + ' د.ع';
-        
-        const formattedNotes = tx.type === 'withdrawal' && tx.commission > 0
+        const displayNotes = tx.type === 'withdrawal' && tx.commission > 0
           ? `${tx.notes || ''} (العمولة: ${Number(tx.commission).toLocaleString('en-US')} د.ع)`
           : (tx.notes || '-');
-
-        // Draw Row Cells
-        doc.text(bidiText(formattedNotes), 360, y + 6, { width: 185, align: 'center' });
-        doc.text(bidiText(amountStr), 250, y + 6, { width: 110, align: 'center' });
-        doc.text(bidiText(typeStr), 170, y + 6, { width: 80, align: 'center' });
-        doc.text(bidiText(dateStr), 50, y + 6, { width: 120, align: 'center' });
-
+          
+        const runningBalStr = Number(tx.runningBalance).toLocaleString('en-US') + ' د.ع';
+        
+        // Draw running balance
+        doc.text(bidiText(runningBalStr), 50, y + 6, { width: 95, align: 'center' });
+        
+        // Draw له / عليه
+        if (tx.type === 'deposit') {
+          const depStr = Number(tx.amount).toLocaleString('en-US') + ' د.ع';
+          doc.text(bidiText(depStr), 145, y + 6, { width: 85, align: 'center' });
+          doc.text(bidiText('-'), 230, y + 6, { width: 85, align: 'center' });
+        } else {
+          doc.text(bidiText('-'), 145, y + 6, { width: 85, align: 'center' });
+          const totalAmount = tx.amount + (tx.commission || 0);
+          const withStr = Number(totalAmount).toLocaleString('en-US') + ' د.ع';
+          doc.text(bidiText(withStr), 230, y + 6, { width: 85, align: 'center' });
+        }
+        
+        // Draw notes & date
+        doc.text(bidiText(displayNotes), 315, y + 6, { width: 120, align: 'center' });
+        doc.text(bidiText(dateStr), 435, y + 6, { width: 110, align: 'center' });
+        
         y += 22;
-
-        // Simple page management
-        if (y > 750) {
+        
+        // Page break handling
+        if (y > 730) {
           doc.addPage();
           y = 50;
-          // Redraw header if needed
         }
       });
 
-      // Draw footer line
-      doc.lineWidth(1).strokeColor('#bdc3c7').moveTo(50, y + 5).lineTo(545, y + 5).stroke();
+      // Draw thick border line at the bottom of the table
+      doc.lineWidth(1.5).strokeColor('#475569').moveTo(50, y).lineTo(545, y).stroke();
+      
+      // Draw Final Summary Box
+      y += 10;
+      doc.rect(50, y, 495, 30).fill('#f1f5f9').stroke('#cbd5e1');
+      doc.fillColor('#0f172a').font('Tajawal-Bold').fontSize(11);
+      
+      const finBalStr = Number(finBal).toLocaleString('en-US') + ' د.ع';
+      const labelText = `الرصيد النهائي للمرحلة المحددة: ${finBalStr} (${finBal >= 0 ? 'له' : 'عليه'})`;
+      doc.text(bidiText(labelText), 60, y + 9, { width: 475, align: 'right' });
 
       doc.end();
     } catch (err) {

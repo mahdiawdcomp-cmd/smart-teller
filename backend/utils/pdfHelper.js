@@ -6,57 +6,10 @@ const { ArabicShaper } = require('arabic-persian-reshaper');
 const fontRegular = path.join(__dirname, '..', 'fonts', 'Amiri-Regular.ttf');
 const fontBold = path.join(__dirname, '..', 'fonts', 'Amiri-Bold.ttf');
 
-// Helper to check if a character is Arabic
-function isArabicChar(char) {
-  const code = char.charCodeAt(0);
-  return (code >= 0x0600 && code <= 0x06FF) || (code >= 0x0750 && code <= 0x077F) || (code >= 0x08A0 && code <= 0x08FF) || (code >= 0xFB50 && code <= 0xFDFF) || (code >= 0xFE70 && code <= 0xFEFF);
-}
-
-// Reverses a string while mirroring parentheses and brackets
-function reverseString(str) {
-  return str.split('').reverse().map(char => {
-    if (char === '(') return ')';
-    if (char === ')') return '(';
-    if (char === '[') return ']';
-    if (char === ']') return '[';
-    if (char === '{') return '}';
-    if (char === '}') return '{';
-    if (char === '<') return '>';
-    if (char === '>') return '<';
-    return char;
-  }).join('');
-}
-
-// Reshapes and reverses Arabic text, keeping numbers and English words left-to-right
+// Reshapes Arabic text to connect letters, letting the PDF viewer handle bidirectional ordering
 function bidiText(text) {
   if (!text) return '';
-  
-  // Reshape the Arabic letters first
-  const reshaped = ArabicShaper.convertArabic(text);
-  
-  // Tokenize the string to separate RTL (Arabic) segments and LTR (Numbers/English) segments
-  const words = reshaped.split(/(\s+)/);
-  const processedWords = words.map(word => {
-    // Check if the word contains Arabic letters
-    let hasArabic = false;
-    for (let i = 0; i < word.length; i++) {
-      if (isArabicChar(word[i])) {
-        hasArabic = true;
-        break;
-      }
-    }
-    
-    if (hasArabic) {
-      // Reverse Arabic word so it displays correctly RTL in PDFkit, swapping brackets/parentheses
-      return reverseString(word);
-    } else {
-      // Keep numbers/English left-to-right
-      return word;
-    }
-  });
-
-  // Reconnect and reverse the entire word array to keep RTL sentence ordering
-  return processedWords.reverse().join('');
+  return ArabicShaper.convertArabic(text);
 }
 
 // Generate PDF Statement (returns a Promise resolving to a base64 string)

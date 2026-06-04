@@ -1,6 +1,6 @@
 const PDFDocument = require('pdfkit');
 const path = require('path');
-const { ArabicPersianReshaper } = require('arabic-persian-reshaper');
+const { ArabicShaper } = require('arabic-persian-reshaper');
 
 // Font paths
 const fontRegular = path.join(__dirname, '..', 'fonts', 'Tajawal-Regular.ttf');
@@ -17,7 +17,7 @@ function bidiText(text) {
   if (!text) return '';
   
   // Reshape the Arabic letters first
-  const reshaped = ArabicPersianReshaper.reshape(text);
+  const reshaped = ArabicShaper.convertArabic(text);
   
   // Tokenize the string to separate RTL (Arabic) segments and LTR (Numbers/English) segments
   const words = reshaped.split(/(\s+)/);

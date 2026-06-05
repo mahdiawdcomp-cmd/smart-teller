@@ -359,12 +359,12 @@ app.post('/api/whatsapp/send-statement', async (req, res) => {
 // 12. Generate PDF Statement (returns base64)
 app.post('/api/pdf/generate', async (req, res) => {
   try {
-    const { customerName, transactions, periodText, balance } = req.body;
+    const { customerName, transactions } = req.body;
     if (!customerName || !transactions) {
       return res.status(400).json({ error: 'CustomerName and transactions are required' });
     }
     const { generatePdfBase64 } = require('./utils/pdfHelper');
-    const base64 = await generatePdfBase64(customerName, transactions, periodText || 'كامل المدة', balance || 0);
+    const base64 = await generatePdfBase64(req.body);
     res.json({ pdfBase64: base64 });
   } catch (error) {
     res.status(500).json({ error: error.message });

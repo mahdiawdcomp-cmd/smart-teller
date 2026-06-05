@@ -24,6 +24,7 @@
     "node-cron": "^4.2.1",
     "pdfkit": "^0.18.0",
     "pino": "^10.3.1",
+    "puppeteer": "^25.1.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"

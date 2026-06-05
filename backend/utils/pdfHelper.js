@@ -1,210 +1,321 @@
-const PDFDocument = require('pdfkit');
+const puppeteerCore = require('puppeteer-core');
 const path = require('path');
-const { ArabicShaper } = require('arabic-persian-reshaper');
+const fs = require('fs');
 
-// Font paths
-const fontRegular = path.join(__dirname, '..', 'fonts', 'Amiri-Regular.ttf');
-const fontBold = path.join(__dirname, '..', 'fonts', 'Amiri-Bold.ttf');
+// ─── Detect available browser on the system ───
+const BROWSER_PATHS = [
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  process.env.CHROME_PATH || '',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium-browser',
+  '/usr/bin/chromium'
+];
 
-// Helper to check if a character is Arabic
-function isArabicChar(char) {
-  const code = char.charCodeAt(0);
-  return (code >= 0x0600 && code <= 0x06FF) ||
-         (code >= 0x0750 && code <= 0x077F) ||
-         (code >= 0x08A0 && code <= 0x08FF) ||
-         (code >= 0xFB50 && code <= 0xFDFF) ||
-         (code >= 0xFE70 && code <= 0xFEFF);
-}
-
-// Reverses a string character-by-character cleanly without mirroring brackets
-function reverseString(str) {
-  return str.split('').reverse().join('');
-}
-
-// Reshapes Arabic text and places it in correct visual order (RTL reversed) for consistent PDF rendering
-function bidiText(text) {
-  if (!text) return '';
-  
-  // 1. Shape the entire string in logical order first to get correct glyph shapes
-  const shapedText = ArabicShaper.convertArabic(text);
-  
-  // 2. Tokenize by spaces to preserve word groupings
-  const words = shapedText.split(/(\s+)/);
-  const processedWords = words.map(word => {
-    // Check if the word contains Arabic letters (original or shaped forms)
-    let hasArabic = false;
-    for (let i = 0; i < word.length; i++) {
-      if (isArabicChar(word[i])) {
-        hasArabic = true;
-        break;
-      }
+function findBrowser() {
+  for (const p of BROWSER_PATHS) {
+    if (p && fs.existsSync(p)) {
+      console.log(`[PDF] Found browser: ${p}`);
+      return p;
     }
-    
-    if (hasArabic) {
-      // Reverse shaped characters of the Arabic word
-      return reverseString(word);
-    } else {
-      // Keep numbers/English left-to-right
-      return word;
-    }
-  });
-
-  // 3. Reconnect and reverse the word array to keep RTL sentence ordering
-  return processedWords.reverse().join('');
+  }
+  return null;
 }
 
-// Generate PDF Statement (returns a Promise resolving to a base64 string)
-function generatePdfBase64(customerName, transactions, periodText, balance, openingBalance = 0, finalBalance = 0) {
-  let opBal = openingBalance;
-  let finBal = finalBalance;
-  
-  if (typeof customerName === 'object') {
-    const data = customerName;
-    customerName = data.customerName;
-    transactions = data.transactions || [];
-    periodText = data.periodText;
-    balance = data.balance || 0;
-    opBal = data.openingBalance || 0;
-    finBal = data.finalBalance || 0;
+const BROWSER_EXE = findBrowser();
+
+// ─── Load Amiri font files as base64 for embedding in HTML ───
+const amiriRegularPath = path.join(__dirname, '..', 'fonts', 'Amiri-Regular.ttf');
+const amiriBoldPath = path.join(__dirname, '..', 'fonts', 'Amiri-Bold.ttf');
+
+let amiriRegularB64 = '';
+let amiriBoldB64 = '';
+
+try {
+  amiriRegularB64 = fs.readFileSync(amiriRegularPath).toString('base64');
+  amiriBoldB64 = fs.readFileSync(amiriBoldPath).toString('base64');
+  console.log('[PDF] Amiri fonts loaded successfully.');
+} catch (e) {
+  console.warn('[PDF] Could not load Amiri fonts:', e.message);
+}
+
+// ─── Singleton browser instance ───
+let browserInstance = null;
+
+async function getBrowser() {
+  if (browserInstance && browserInstance.isConnected()) {
+    return browserInstance;
   }
 
-  return new Promise((resolve, reject) => {
-    try {
-      const doc = new PDFDocument({ margin: 50, size: 'A4' });
-      const buffers = [];
-      
-      doc.on('data', buffers.push.bind(buffers));
-      doc.on('end', () => {
-        const pdfData = Buffer.concat(buffers);
-        resolve(pdfData.toString('base64'));
-      });
+  if (!BROWSER_EXE) {
+    throw new Error('No supported browser found (Edge/Chrome/Chromium). Please install one.');
+  }
 
-      // Register Arabic fonts
-      doc.registerFont('Amiri', fontRegular);
-      doc.registerFont('Amiri-Bold', fontBold);
-
-      // Title
-      doc.font('Amiri-Bold')
-         .fillColor('#0f172a')
-         .fontSize(22)
-         .text(bidiText('كشف حساب الصراف الذكي'), { align: 'center' });
-      
-      doc.moveDown(0.3);
-      
-      // Subtitle / Period
-      doc.font('Amiri')
-         .fillColor('#475569')
-         .fontSize(12)
-         .text(bidiText(`تاريخ الكشف: ${periodText}`), { align: 'center' });
-
-      doc.moveDown(1.2);
-
-      // Customer Details Card
-      doc.rect(50, 110, 495, 55).fillAndStroke('#f8fafc', '#cbd5e1');
-      doc.fillColor('#0f172a');
-
-      doc.font('Amiri-Bold').fontSize(11);
-      doc.text(bidiText(`اسم الزبون: ${customerName}`), 70, 122, { align: 'right', width: 450 });
-      
-      const formattedBalance = Number(balance).toLocaleString('en-US') + ' د.ع';
-      doc.text(bidiText(`الرصيد الكلي الحالي للمكتب: ${formattedBalance}`), 70, 140, { align: 'right', width: 450 });
-
-      // Table Header Configuration
-      const tableTop = 185;
-      
-      // Table Header Row Background
-      doc.rect(50, tableTop, 495, 25).fill('#334155');
-
-      // Headers (RTL columns: الرصيد | له (مسدد) | عليه (مطلوب) | الملاحظات | التاريخ)
-      doc.fillColor('#ffffff').font('Amiri-Bold').fontSize(10);
-      doc.text(bidiText('الرصيد'), 50, tableTop + 7, { width: 95, align: 'center' });
-      doc.text(bidiText('له (مسدد)'), 145, tableTop + 7, { width: 85, align: 'center' });
-      doc.text(bidiText('عليه (مطلوب)'), 230, tableTop + 7, { width: 85, align: 'center' });
-      doc.text(bidiText('الملاحظات'), 315, tableTop + 7, { width: 120, align: 'center' });
-      doc.text(bidiText('التاريخ'), 435, tableTop + 7, { width: 110, align: 'center' });
-
-      // Draw Opening Balance Row (رصيد سابق)
-      let y = tableTop + 25;
-      doc.rect(50, y, 495, 22).fill('#f1f5f9');
-      doc.fillColor('#475569').font('Amiri-Bold').fontSize(10);
-      
-      const opBalStr = Number(opBal).toLocaleString('en-US') + ' د.ع';
-      doc.text(bidiText(opBalStr), 50, y + 6, { width: 95, align: 'center' });
-      doc.text(bidiText('-'), 145, y + 6, { width: 85, align: 'center' });
-      doc.text(bidiText('-'), 230, y + 6, { width: 85, align: 'center' });
-      doc.text(bidiText('رصيد سابق (افتتاحي)'), 315, y + 6, { width: 120, align: 'center' });
-      doc.text(bidiText('-'), 435, y + 6, { width: 110, align: 'center' });
-      
-      y += 22;
-
-      // Table Rows for Transactions
-      doc.font('Amiri').fontSize(9);
-
-      (transactions || []).forEach((tx, idx) => {
-        // Alternating row background
-        if (idx % 2 === 0) {
-          doc.rect(50, y, 495, 22).fill('#ffffff');
-        } else {
-          doc.rect(50, y, 495, 22).fill('#f8fafc');
-        }
-        
-        doc.fillColor('#0f172a');
-
-        const dateStr = new Date(tx.date).toLocaleDateString('en-US');
-        const displayNotes = tx.type === 'withdrawal' && tx.commission > 0
-          ? `${tx.notes || ''} (العمولة: ${Number(tx.commission).toLocaleString('en-US')} د.ع)`
-          : (tx.notes || '-');
-          
-        const runningBalStr = Number(tx.runningBalance).toLocaleString('en-US') + ' د.ع';
-        
-        // Draw running balance
-        doc.text(bidiText(runningBalStr), 50, y + 6, { width: 95, align: 'center' });
-        
-        // Draw له / عليه
-        if (tx.type === 'deposit') {
-          const depStr = Number(tx.amount).toLocaleString('en-US') + ' د.ع';
-          doc.text(bidiText(depStr), 145, y + 6, { width: 85, align: 'center' });
-          doc.text(bidiText('-'), 230, y + 6, { width: 85, align: 'center' });
-        } else {
-          doc.text(bidiText('-'), 145, y + 6, { width: 85, align: 'center' });
-          const totalAmount = tx.amount + (tx.commission || 0);
-          const withStr = Number(totalAmount).toLocaleString('en-US') + ' د.ع';
-          doc.text(bidiText(withStr), 230, y + 6, { width: 85, align: 'center' });
-        }
-        
-        // Draw notes & date
-        doc.text(bidiText(displayNotes), 315, y + 6, { width: 120, align: 'center' });
-        doc.text(bidiText(dateStr), 435, y + 6, { width: 110, align: 'center' });
-        
-        y += 22;
-        
-        // Page break handling
-        if (y > 730) {
-          doc.addPage();
-          y = 50;
-        }
-      });
-
-      // Draw thick border line at the bottom of the table
-      doc.lineWidth(1.5).strokeColor('#475569').moveTo(50, y).lineTo(545, y).stroke();
-      
-      // Draw Final Summary Box
-      y += 10;
-      doc.rect(50, y, 495, 30).fill('#f1f5f9').stroke('#cbd5e1');
-      doc.fillColor('#0f172a').font('Amiri-Bold').fontSize(11);
-      
-      const finBalStr = Number(finBal).toLocaleString('en-US') + ' د.ع';
-      const labelText = `الرصيد النهائي للمرحلة المحددة: ${finBalStr} (${finBal >= 0 ? 'له' : 'عليه'})`;
-      doc.text(bidiText(labelText), 60, y + 9, { width: 475, align: 'right' });
-
-      doc.end();
-    } catch (err) {
-      reject(err);
-    }
+  console.log('[PDF] Launching browser...');
+  browserInstance = await puppeteerCore.launch({
+    executablePath: BROWSER_EXE,
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-default-apps',
+      '--no-first-run'
+    ]
   });
+  console.log('[PDF] Browser launched successfully.');
+  return browserInstance;
+}
+
+// ─── Format number helper ───
+function fmt(n) {
+  return Number(n || 0).toLocaleString('en-US');
+}
+
+// ─── Build the full HTML template ───
+function buildHtml(customerName, transactions, periodText, balance, openingBalance, finalBalance) {
+
+  // Build transaction rows
+  let rowsHtml = '';
+
+  // Opening balance row
+  rowsHtml += `
+    <tr class="opening-row">
+      <td>-</td>
+      <td class="notes">رصيد سابق (افتتاحي)</td>
+      <td>-</td>
+      <td>-</td>
+      <td>${fmt(openingBalance)} د.ع</td>
+    </tr>`;
+
+  (transactions || []).forEach((tx, idx) => {
+    const dateStr = new Date(tx.date).toLocaleDateString('en-US');
+
+    let displayNotes = tx.notes || '-';
+    if (tx.type === 'withdrawal' && tx.commission > 0) {
+      displayNotes = `${tx.notes || ''} (العمولة: ${fmt(tx.commission)} د.ع)`;
+    }
+
+    const totalAmount = tx.type === 'withdrawal'
+      ? tx.amount + (tx.commission || 0)
+      : tx.amount;
+
+    const rowClass = idx % 2 === 0 ? 'even' : 'odd';
+
+    const debitCell = tx.type === 'withdrawal' ? `${fmt(totalAmount)} د.ع` : '-';
+    const creditCell = tx.type === 'deposit' ? `${fmt(tx.amount)} د.ع` : '-';
+
+    rowsHtml += `
+      <tr class="${rowClass}">
+        <td>${dateStr}</td>
+        <td class="notes">${displayNotes}</td>
+        <td>${debitCell}</td>
+        <td>${creditCell}</td>
+        <td>${fmt(tx.runningBalance)} د.ع</td>
+      </tr>`;
+  });
+
+  const balanceLabel = finalBalance >= 0 ? 'له' : 'عليه';
+  const summaryColor = finalBalance >= 0 ? '#16a34a' : '#dc2626';
+
+  // Font face CSS - embed base64 if loaded, else use system Arabic fonts
+  let fontCSS = '';
+  if (amiriRegularB64 && amiriBoldB64) {
+    fontCSS = `
+      @font-face {
+        font-family: 'Amiri';
+        src: url(data:font/truetype;base64,${amiriRegularB64}) format('truetype');
+        font-weight: 400;
+      }
+      @font-face {
+        font-family: 'Amiri';
+        src: url(data:font/truetype;base64,${amiriBoldB64}) format('truetype');
+        font-weight: 700;
+      }`;
+  }
+
+  return `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8">
+<style>
+${fontCSS}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Amiri', 'Traditional Arabic', 'Tahoma', 'Arial', sans-serif;
+  direction: rtl;
+  text-align: right;
+  padding: 30px 35px;
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.7;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* ─── Title ─── */
+.header {
+  text-align: center;
+  margin-bottom: 18px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid #334155;
+}
+.header h1 {
+  font-size: 26px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 4px;
+}
+.header .period {
+  color: #64748b;
+  font-size: 13px;
+}
+
+/* ─── Customer Info ─── */
+.info-card {
+  background: #f8fafc;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 12px 20px;
+  margin-bottom: 20px;
+}
+.info-card p {
+  font-weight: 700;
+  font-size: 13px;
+  margin: 4px 0;
+}
+
+/* ─── Table ─── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 16px;
+  border: 1.5px solid #94a3b8;
+}
+thead th {
+  background: #334155;
+  color: #fff;
+  font-weight: 700;
+  padding: 10px 8px;
+  text-align: center;
+  font-size: 12px;
+  border: 1px solid #475569;
+}
+tbody td {
+  padding: 7px 6px;
+  text-align: center;
+  font-size: 11px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.notes {
+  max-width: 180px;
+  word-wrap: break-word;
+  font-size: 10.5px;
+}
+.opening-row {
+  background: #e2e8f0;
+  font-weight: 700;
+}
+.even { background: #fff; }
+.odd  { background: #f8fafc; }
+
+tr { page-break-inside: avoid; }
+
+/* ─── Summary ─── */
+.summary {
+  background: #f1f5f9;
+  border: 2px solid #94a3b8;
+  border-radius: 8px;
+  padding: 14px 20px;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: ${summaryColor};
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>كشف حساب الصراف الذكي</h1>
+  <div class="period">تاريخ الكشف: ${periodText || 'كامل المدة'}</div>
+</div>
+
+<div class="info-card">
+  <p>اسم الزبون: ${customerName}</p>
+  <p>الرصيد الكلي الحالي للمكتب: ${fmt(balance)} د.ع</p>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:14%">التاريخ</th>
+      <th style="width:28%">الملاحظات</th>
+      <th style="width:18%">عليه (مطلوب)</th>
+      <th style="width:18%">له (مسدد)</th>
+      <th style="width:22%">الرصيد</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${rowsHtml}
+  </tbody>
+</table>
+
+<div class="summary">
+  الرصيد النهائي للمرحلة المحددة: ${fmt(finalBalance)} د.ع (${balanceLabel})
+</div>
+
+</body>
+</html>`;
+}
+
+// ─── Main: Generate PDF as Base64 ───
+async function generatePdfBase64(customerName, transactions, periodText, balance, openingBalance, finalBalance) {
+  // Support both object and positional call signatures
+  let cName = customerName, txs = transactions, period = periodText;
+  let bal = balance, opBal = openingBalance || 0, finBal = finalBalance || 0;
+
+  if (typeof customerName === 'object' && customerName !== null) {
+    const d = customerName;
+    cName  = d.customerName;
+    txs    = d.transactions || [];
+    period = d.periodText || 'كامل المدة';
+    bal    = d.balance || 0;
+    opBal  = d.openingBalance || 0;
+    finBal = d.finalBalance || 0;
+  }
+
+  const html = buildHtml(cName, txs, period, bal, opBal, finBal);
+
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+
+  try {
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    // Brief wait for font rendering
+    await new Promise(r => setTimeout(r, 500));
+
+    const pdfBuffer = await page.pdf({
+      format: 'A4',
+      margin: { top: '15px', right: '20px', bottom: '15px', left: '20px' },
+      printBackground: true,
+      preferCSSPageSize: false
+    });
+
+    return Buffer.from(pdfBuffer).toString('base64');
+  } finally {
+    await page.close();
+  }
 }
 
 module.exports = {
-  generatePdfBase64,
-  bidiText
+  generatePdfBase64
 };

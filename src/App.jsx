@@ -5,6 +5,7 @@ import TransactionForm from './components/TransactionForm';
 import Statements from './components/Statements';
 import Expenses from './components/Expenses';
 import WhatsAppSetup from './components/WhatsAppSetup';
+import SharedStatementView from './components/SharedStatementView';
 import { Landmark, Users, ArrowUpRight, ArrowDownRight, LogOut, Key, Phone, ShieldCheck } from 'lucide-react';
 
 export default function App() {
@@ -34,14 +35,20 @@ export default function App() {
   const [newCustPhone, setNewCustPhone] = useState('');
   const [addCustError, setAddCustError] = useState('');
 
+  // Check URL for shared statement token
+  const searchParams = new URLSearchParams(window.location.search);
+  const sharedToken = searchParams.get('shared');
+
   // Check auth session on mount
   useEffect(() => {
+    if (sharedToken) return; // Skip auth check if viewing a shared statement
+    
     const token = localStorage.getItem('teller_session');
     if (token) {
       setIsAuthenticated(true);
       loadCustomers();
     }
-  }, []);
+  }, [sharedToken]);
 
   // Fetch all customers data
   const loadCustomers = async () => {
@@ -155,6 +162,11 @@ export default function App() {
   };
 
   const stats = getAppStats();
+
+  // If URL has ?shared=TOKEN, render ONLY the shared public view
+  if (sharedToken) {
+    return <SharedStatementView token={sharedToken} />;
+  }
 
   // If not authenticated, render login panel
   if (!isAuthenticated) {

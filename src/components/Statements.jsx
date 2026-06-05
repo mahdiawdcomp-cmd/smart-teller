@@ -11,6 +11,11 @@ export default function Statements({ customer, onBack }) {
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [loadingSend, setLoadingSend] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
+  
+  // Shared Link State
+  const [isShared, setIsShared] = useState(customer?.isSharedLinkActive || false);
+  const [sharedToken, setSharedToken] = useState(customer?.sharedToken || null);
+  const [linkActionLoading, setLinkActionLoading] = useState(false);
 
   // Apply filters
   useEffect(() => {
@@ -213,6 +218,35 @@ export default function Statements({ customer, onBack }) {
     window.open(waUrl, '_blank');
   };
 
+  // 4. Shared Link Management
+  const handleToggleShare = async (enable) => {
+    setLinkActionLoading(true);
+    try {
+      const res = await api.toggleShareLink(customer.id, enable);
+      setIsShared(res.isSharedLinkActive);
+      setSharedToken(res.sharedToken);
+      setStatusMessage(enable ? 'تم تفعيل الرابط بنجاح! ✅' : 'تم إيقاف الرابط 🚫');
+      setTimeout(() => setStatusMessage(''), 3000);
+      
+      // Update local customer object for UI consistency
+      customer.isSharedLinkActive = res.isSharedLinkActive;
+      customer.sharedToken = res.sharedToken;
+    } catch (err) {
+      setStatusMessage(`خطأ: ${err.message}`);
+    } finally {
+      setLinkActionLoading(false);
+    }
+  };
+
+  const handleCopyLink = () => {
+    if (!sharedToken) return;
+    const link = `${window.location.origin}/?shared=${sharedToken}`;
+    navigator.clipboard.writeText(link).then(() => {
+      setStatusMessage('تم نسخ الرابط! يمكنك إرساله للزبون.');
+      setTimeout(() => setStatusMessage(''), 3000);
+    });
+  };
+
   // Calculate totals for selected filtered transactions
   const totalDeposits = filteredTransactions
     .filter(t => t.type === 'deposit')
@@ -384,7 +418,53 @@ export default function Statements({ customer, onBack }) {
           <Send size={20} />
           إرسال ملخص نصي سريع (واتساب)
         </button>
-        
+      </div>
+
+      {/* Shared Link Controls */}
+      <div className="panel-card" style={{ marginBottom: '2rem', border: '1.5px solid var(--border-light)', backgroundColor: 'var(--bg-light)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+          <div>
+            <h3 style={{ margin: '0 0 0.5rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              🔗 رابط الكشف المباشر للزبون
+              {isShared ? (
+                <span className="badge badge-deposit" style={{ fontSize: '12px' }}>نشط ويتم التحديث تلقائياً</span>
+              ) : (
+                <span className="badge badge-withdrawal" style={{ fontSize: '12px', backgroundColor: 'var(--text-muted)' }}>متوقف</span>
+              )}
+            </h3>
+            <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '14px' }}>
+              شارك الرابط مع الزبون ليتمكن من رؤية كشف حسابه المحدث باستمرار عبر هاتفه.
+            </p>
+          </div>
+          
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            {isShared ? (
+              <>
+                <button 
+                  className="btn btn-primary" 
+                  onClick={handleCopyLink}
+                >
+                  نسخ الرابط
+                </button>
+                <button 
+                  className="btn btn-danger" 
+                  onClick={() => handleToggleShare(false)}
+                  disabled={linkActionLoading}
+                >
+                  {linkActionLoading ? 'جاري...' : 'إيقاف الرابط'}
+                </button>
+              </>
+            ) : (
+              <button 
+                className="btn btn-success" 
+                onClick={() => handleToggleShare(true)}
+                disabled={linkActionLoading}
+              >
+                {linkActionLoading ? 'جاري...' : 'إنشاء وتفعيل رابط'}
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Transactions Ledger Table */}

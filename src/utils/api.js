@@ -38,6 +38,30 @@ export const api = {
     return res.json();
   },
 
+  // Shared Statement API
+  toggleShareLink: async (customerId, isShared) => {
+    const res = await fetch(`${API_BASE}/customers/${customerId}/share`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isShared })
+    });
+    if (!res.ok) throw new Error('فشل تعديل حالة الرابط');
+    return res.json();
+  },
+
+  getSharedStatement: async (token, phone) => {
+    const res = await fetch(`${API_BASE}/shared/statement/${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone })
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'فشل جلب الكشف، تأكد من صحة رقم الهاتف');
+    }
+    return res.json();
+  },
+
   // Expenses
   getExpenses: async () => {
     const res = await fetch(`${API_BASE}/expenses`);

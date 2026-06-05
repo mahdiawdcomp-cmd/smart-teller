@@ -186,6 +186,91 @@ app.post('/api/customers/:id/transactions', async (req, res) => {
   }
 });
 
+// 4.1 Toggle Share Link for a Customer
+app.post('/api/customers/:id/share', async (req, res) => {
+  try {
+    const customerId = req.params.id;
+    const { isShared } = req.body;
+
+    if (db) {
+      const docRef = db.collection('customers').doc(customerId);
+      const doc = await docRef.get();
+      if (!doc.exists) return res.status(404).json({ error: 'Customer not found' });
+      
+      const customer = doc.data();
+      let sharedToken = customer.sharedToken;
+      if (isShared && !sharedToken) {
+        sharedToken = require('crypto').randomBytes(16).toString('hex');
+      }
+
+      await docRef.update({
+        isSharedLinkActive: !!isShared,
+        sharedToken: sharedToken || null
+      });
+
+      return res.json({ isSharedLinkActive: !!isShared, sharedToken });
+    } else {
+      const data = await readData();
+      const customer = data.customers.find(c => c.id === customerId);
+      if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+      let sharedToken = customer.sharedToken;
+      if (isShared && !sharedToken) {
+        sharedToken = require('crypto').randomBytes(16).toString('hex');
+      }
+
+      customer.isSharedLinkActive = !!isShared;
+      customer.sharedToken = sharedToken || null;
+      await writeData(data);
+
+      return res.json({ isSharedLinkActive: !!isShared, sharedToken });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 4.2 Get Shared Statement (Public - requires phone number match)
+app.post('/api/shared/statement/:token', async (req, res) => {
+  try {
+    const token = req.params.token;
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ error: 'يجب إدخال رقم الهاتف' });
+    }
+
+    const data = await readData();
+    const customer = data.customers.find(c => c.sharedToken === token && c.isSharedLinkActive);
+
+    if (!customer) {
+      return res.status(404).json({ error: 'الرابط غير صالح أو تم إيقافه' });
+    }
+
+    // Basic phone verification (ignoring spaces or international prefixes for flexibility if needed, but strict is safer)
+    // Let's do a strict endsWith check to be safe but allow +964 vs 07
+    const cleanDbPhone = customer.phone.replace(/\D/g, '');
+    const cleanInputPhone = phone.replace(/\D/g, '');
+
+    if (!cleanDbPhone || !cleanInputPhone || !cleanDbPhone.endsWith(cleanInputPhone.slice(-10))) {
+      return res.status(401).json({ error: 'رقم الهاتف غير صحيح' });
+    }
+
+    // Return safe data (exclude sensitive owner-only flags)
+    const safeCustomer = {
+      name: customer.name,
+      phone: customer.phone,
+      balance: customer.balance,
+      transactions: customer.transactions || [],
+      createdAt: customer.createdAt
+    };
+
+    return res.json(safeCustomer);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 5. Get all expenses
 app.get('/api/expenses', async (req, res) => {
   try {

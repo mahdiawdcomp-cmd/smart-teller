@@ -1,31 +1,6 @@
-const puppeteerCore = require('puppeteer-core');
+const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
-
-// ─── Detect available browser on the system ───
-const BROWSER_PATHS = [
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  process.env.CHROME_PATH || '',
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/google-chrome',
-  '/usr/bin/chromium-browser',
-  '/usr/bin/chromium'
-];
-
-function findBrowser() {
-  for (const p of BROWSER_PATHS) {
-    if (p && fs.existsSync(p)) {
-      console.log(`[PDF] Found browser: ${p}`);
-      return p;
-    }
-  }
-  return null;
-}
-
-const BROWSER_EXE = findBrowser();
 
 // ─── Load Amiri font files as base64 for embedding in HTML ───
 const amiriRegularPath = path.join(__dirname, '..', 'fonts', 'Amiri-Regular.ttf');
@@ -50,13 +25,8 @@ async function getBrowser() {
     return browserInstance;
   }
 
-  if (!BROWSER_EXE) {
-    throw new Error('No supported browser found (Edge/Chrome/Chromium). Please install one.');
-  }
-
   console.log('[PDF] Launching browser...');
-  browserInstance = await puppeteerCore.launch({
-    executablePath: BROWSER_EXE,
+  browserInstance = await puppeteer.launch({
     headless: 'new',
     args: [
       '--no-sandbox',

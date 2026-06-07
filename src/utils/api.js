@@ -1,5 +1,7 @@
-// Base URL configuration - dynamically point to backend port 5000
-const API_BASE = `http://${window.location.hostname}:5000/api`;
+// Base URL configuration
+const API_BASE = import.meta.env.DEV 
+  ? 'http://localhost:5000/api' 
+  : '/api';
 
 export const api = {
   // Get database summary

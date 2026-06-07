@@ -27,3 +27,6 @@ pnpm-debug.log*
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Puppeteer Cache
+.cache/

@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc13",

@@ -1,7 +1,5 @@
-// Base URL configuration
-const API_BASE = import.meta.env.DEV 
-  ? 'http://localhost:5000/api' 
-  : '/api';
+// Base URL configuration - dynamically point to backend port 5000
+const API_BASE = `http://${window.location.hostname}:5000/api`;
 
 export const api = {
   // Get database summary
@@ -142,7 +140,10 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(pdfData)
     });
-    if (!res.ok) throw new Error('فشل توليد ملف الكشف PDF');
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `فشل توليد ملف الكشف PDF (Status: ${res.status}, URL: ${API_BASE}/pdf/generate)`);
+    }
     return res.json(); // returns { pdfBase64 }
   },
 

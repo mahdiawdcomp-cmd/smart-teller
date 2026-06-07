@@ -7,10 +7,18 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const app = express();
+
+// Log every incoming request
+app.use((req, res, next) => {
+  console.log(`[REQUEST] ${req.method} ${req.url}`);
+  next();
+});
+
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Import Firebase Admin initializers
 const { db } = require('./firebaseAdmin');
@@ -443,6 +451,7 @@ app.post('/api/whatsapp/send-statement', async (req, res) => {
 
 // 12. Generate PDF Statement (returns base64)
 app.post('/api/pdf/generate', async (req, res) => {
+  console.log(`[PDF ROUTE] Request received for customer: ${req.body?.customerName}, tx count: ${req.body?.transactions?.length}`);
   try {
     const { customerName, transactions } = req.body;
     if (!customerName || !transactions) {
@@ -452,6 +461,7 @@ app.post('/api/pdf/generate', async (req, res) => {
     const base64 = await generatePdfBase64(req.body);
     res.json({ pdfBase64: base64 });
   } catch (error) {
+    console.error('[PDF ERROR]', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -517,16 +527,32 @@ app.post('/api/auth/verify-otp', (req, res) => {
   res.json({ success: true, token: 'session-active' });
 });
 
-// Serve frontend static files in production
-const frontendDist = path.join(__dirname, '..', 'dist');
+// Set static folder for React frontend
+const frontendDist = path.join(__dirname, '../dist');
 if (fs.existsSync(frontendDist)) {
-  app.use(express.static(frontendDist));
-  app.get(/.*/, (req, res) => {
-    res.sendFile(path.join(frontendDist, 'index.html'));
-  });
+app.use(express.static(frontendDist, {
+  setHeaders: (res, path) => {
+    if (path.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
+
+// Fallback for React Router
+app.get(/.*/, (req, res) => {
+  res.sendFile(path.join(frontendDist, 'index.html'));
+});
 }
 
-// Start server
-app.listen(PORT, () => {
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error('[GLOBAL ERROR]', err.message);
+  res.status(err.status || 500).json({ error: err.message });
+});
+
+// Start Server
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Smart Teller Server is running on port ${PORT}`);
 });

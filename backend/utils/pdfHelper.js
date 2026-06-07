@@ -46,7 +46,7 @@ try {
 let browserInstance = null;
 
 async function getBrowser() {
-  if (browserInstance && browserInstance.isConnected()) {
+  if (browserInstance && browserInstance.connected) {
     return browserInstance;
   }
 

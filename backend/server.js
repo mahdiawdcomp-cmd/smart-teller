@@ -3,10 +3,20 @@ const cors = require('cors');
 const fs = require('fs-extra');
 const path = require('path');
 const dotenv = require('dotenv');
+const rateLimit = require('express-rate-limit');
 
 dotenv.config();
 
+const auth = require('./auth');
+const share = require('./sharedAccess');
+
+// Refuses to start when the admin password or JWT secret is missing.
+auth.assertConfigured();
+
 const app = express();
+
+// Render (and any proxy) puts the real client IP in X-Forwarded-For.
+app.set('trust proxy', 1);
 
 // Log every incoming request
 app.use((req, res, next) => {
@@ -81,7 +91,61 @@ async function writeData(data) {
   }
 }
 
+/**
+ * Records who opened (or tried to open) a customer's shared statement link.
+ * Best-effort: a logging failure must never block the customer from seeing the statement.
+ */
+async function logSharedAccess(customer, req, success) {
+  const entry = {
+    at: new Date().toISOString(),
+    ip: share.clientIp(req),
+    success
+  };
+
+  try {
+    if (db) {
+      const docRef = db.collection('customers').doc(customer.id);
+      const updatedLog = share.appendAccessLog(customer.sharedAccessLog, entry);
+      await docRef.update({ sharedAccessLog: updatedLog });
+    } else {
+      const data = await readData();
+      const target = data.customers.find(c => c.id === customer.id);
+      if (target) {
+        target.sharedAccessLog = share.appendAccessLog(target.sharedAccessLog, entry);
+        await writeData(data);
+      }
+    }
+  } catch (err) {
+    console.error('[SHARE] Failed to record access log:', err.message);
+  }
+}
+
+// --- SECURITY GATE ---
+// Everything under /api requires a valid admin token, except the login endpoints
+// and the public shared-statement endpoint (which has its own phone verification).
+const PUBLIC_API_PREFIXES = ['/auth/', '/shared/', '/health'];
+
+app.use('/api', (req, res, next) => {
+  const isPublic = PUBLIC_API_PREFIXES.some(prefix => req.path.startsWith(prefix));
+  if (isPublic) return next();
+  return auth.requireAuth(req, res, next);
+});
+
+// Brute-force protection on the login endpoints.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'محاولات كثيرة جداً، يرجى الانتظار 15 دقيقة ثم المحاولة مجدداً.' }
+});
+
 // --- API ROUTES ---
+
+// 0. Health check (public, used by uptime monitors)
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, time: new Date().toISOString() });
+});
 
 // 1. Get database summary
 app.get('/api/summary', async (req, res) => {
@@ -198,40 +262,36 @@ app.post('/api/customers/:id/transactions', async (req, res) => {
 app.post('/api/customers/:id/share', async (req, res) => {
   try {
     const customerId = req.params.id;
-    const { isShared } = req.body;
+    const { isShared, days } = req.body;
+
+    // A fresh token is minted on every enable, so revoking a link is permanent:
+    // an old URL that leaked can never be reactivated.
+    const enable = !!isShared;
+    const newToken = enable ? require('crypto').randomBytes(24).toString('hex') : null;
+    const expiresAt = enable ? share.buildExpiry(days) : null;
+
+    const update = {
+      isSharedLinkActive: enable,
+      sharedToken: newToken,
+      sharedExpiresAt: expiresAt
+    };
 
     if (db) {
       const docRef = db.collection('customers').doc(customerId);
       const doc = await docRef.get();
       if (!doc.exists) return res.status(404).json({ error: 'Customer not found' });
-      
-      const customer = doc.data();
-      let sharedToken = customer.sharedToken;
-      if (isShared && !sharedToken) {
-        sharedToken = require('crypto').randomBytes(16).toString('hex');
-      }
 
-      await docRef.update({
-        isSharedLinkActive: !!isShared,
-        sharedToken: sharedToken || null
-      });
-
-      return res.json({ isSharedLinkActive: !!isShared, sharedToken });
+      await docRef.update(update);
+      return res.json(update);
     } else {
       const data = await readData();
       const customer = data.customers.find(c => c.id === customerId);
       if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
-      let sharedToken = customer.sharedToken;
-      if (isShared && !sharedToken) {
-        sharedToken = require('crypto').randomBytes(16).toString('hex');
-      }
-
-      customer.isSharedLinkActive = !!isShared;
-      customer.sharedToken = sharedToken || null;
+      Object.assign(customer, update);
       await writeData(data);
 
-      return res.json({ isSharedLinkActive: !!isShared, sharedToken });
+      return res.json(update);
     }
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -248,21 +308,36 @@ app.post('/api/shared/statement/:token', async (req, res) => {
       return res.status(400).json({ error: 'يجب إدخال رقم الهاتف' });
     }
 
+    // Guessing protection comes first, so a locked token costs an attacker nothing to learn.
+    const limit = share.checkRateLimit(token);
+    if (limit.blocked) {
+      const minutes = Math.ceil(limit.retryAfterSeconds / 60);
+      return res.status(429).json({
+        error: `تم إيقاف المحاولات مؤقتاً بسبب محاولات خاطئة متكررة. حاول بعد ${minutes} دقيقة.`
+      });
+    }
+
     const data = await readData();
     const customer = data.customers.find(c => c.sharedToken === token && c.isSharedLinkActive);
 
     if (!customer) {
+      share.recordFailure(token);
       return res.status(404).json({ error: 'الرابط غير صالح أو تم إيقافه' });
     }
 
-    // Basic phone verification (ignoring spaces or international prefixes for flexibility if needed, but strict is safer)
-    // Let's do a strict endsWith check to be safe but allow +964 vs 07
-    const cleanDbPhone = customer.phone.replace(/\D/g, '');
-    const cleanInputPhone = phone.replace(/\D/g, '');
+    if (share.isExpired(customer.sharedExpiresAt)) {
+      return res.status(410).json({ error: 'انتهت صلاحية هذا الرابط، يرجى طلب رابط جديد من المكتب' });
+    }
 
-    if (!cleanDbPhone || !cleanInputPhone || !cleanDbPhone.endsWith(cleanInputPhone.slice(-10))) {
+    // Strict match on the normalized number — a partial number can never pass.
+    if (!share.phoneMatches(customer.phone, phone)) {
+      share.recordFailure(token);
+      await logSharedAccess(customer, req, false);
       return res.status(401).json({ error: 'رقم الهاتف غير صحيح' });
     }
+
+    share.clearFailures(token);
+    await logSharedAccess(customer, req, true);
 
     // Return safe data (exclude sensitive owner-only flags)
     const safeCustomer = {
@@ -467,64 +542,85 @@ app.post('/api/pdf/generate', async (req, res) => {
 });
 
 // --- AUTHENTICATION ROUTES ---
-let currentOtp = null;
-let otpExpiry = null;
 
-// 13. Login check
-app.post('/api/auth/login', async (req, res) => {
+// 13. Login (step 1: password)
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
   try {
     const { password } = req.body;
-    const adminPassword = process.env.ADMIN_PASSWORD || 'IraqCell@2026';
-    const ownerPhone = process.env.OWNER_PHONE_NUMBER;
 
-    if (password !== adminPassword) {
+    const passwordOk = await auth.verifyPassword(password);
+    if (!passwordOk) {
       return res.status(401).json({ error: 'كلمة المرور خاطئة!' });
+    }
+
+    // Two-factor is considered OFF only when no owner phone was ever configured.
+    if (!auth.OWNER_PHONE_NUMBER) {
+      return res.json({
+        success: true,
+        token: auth.issueToken(),
+        warning: 'التحقق بخطوتين غير مفعّل — لم يتم ضبط رقم المالك. يُنصح بتفعيله.'
+      });
     }
 
     const { getWhatsAppStatus, sendTextMessage } = require('./whatsapp');
     const wsStatus = getWhatsAppStatus();
 
-    // If WhatsApp is connected and owner phone is set, require OTP
-    if (wsStatus.status === 'connected' && ownerPhone) {
-      currentOtp = Math.floor(100000 + Math.random() * 900000).toString();
-      otpExpiry = Date.now() + 5 * 60 * 1000; // 5 minutes validity
-
-      const otpText = `🔒 رمز التحقق للدخول إلى تطبيق حساب الصراف الذكي هو: *${currentOtp}*\nصالح لمدة 5 دقائق.`;
-      
-      try {
-        await sendTextMessage(ownerPhone, otpText);
-        return res.json({ requiresOTP: true, message: 'تم إرسال رمز التحقق إلى حسابك بالواتساب' });
-      } catch (e) {
-        console.error("Failed to send OTP via WhatsApp:", e);
-        // Fallback: allow login directly if sending fails to avoid lockout
-        return res.json({ success: true, token: 'session-active', warning: 'فشل إرسال رمز التحقق بالواتساب، تم الدخول بالرمز الرئيسي.' });
+    if (wsStatus.status !== 'connected') {
+      // Two-factor is configured but undeliverable. Skipping it would defeat the
+      // whole point, so access is refused unless the owner set an explicit escape hatch.
+      if (auth.ALLOW_LOGIN_WITHOUT_OTP) {
+        return res.json({
+          success: true,
+          token: auth.issueToken(),
+          warning: 'تم الدخول بدون رمز تحقق (وضع الطوارئ مفعّل). أوقفه فور عودة الواتساب.'
+        });
       }
+      return res.status(503).json({
+        error: 'الواتساب غير متصل، ولا يمكن إرسال رمز التحقق. اربط الواتساب أولاً أو فعّل وضع الطوارئ من إعدادات الخادم.'
+      });
     }
 
-    // Direct login if WhatsApp is not set up
-    return res.json({ success: true, token: 'session-active', warning: 'الواتساب غير متصل حالياً، تم الدخول بالرمز الرئيسي فقط.' });
+    const { otpSessionId, code } = auth.createOtpSession();
+    const otpText =
+      `🔒 رمز التحقق للدخول إلى تطبيق حساب الصراف الذكي هو: *${code}*\n` +
+      `صالح لمدة 5 دقائق. لا تشاركه مع أي شخص.`;
+
+    try {
+      await sendTextMessage(auth.OWNER_PHONE_NUMBER, otpText);
+    } catch (e) {
+      auth.discardOtpSession(otpSessionId);
+      console.error('Failed to send OTP via WhatsApp:', e);
+      return res.status(503).json({
+        error: 'تعذّر إرسال رمز التحقق عبر الواتساب. حاول مجدداً بعد قليل.'
+      });
+    }
+
+    return res.json({
+      requiresOTP: true,
+      otpSessionId,
+      message: 'تم إرسال رمز التحقق إلى حسابك بالواتساب'
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('[AUTH LOGIN ERROR]', error);
+    res.status(500).json({ error: 'حدث خطأ أثناء تسجيل الدخول' });
   }
 });
 
-// 14. Verify OTP
-app.post('/api/auth/verify-otp', (req, res) => {
-  const { otp } = req.body;
-  
-  if (!currentOtp || !otpExpiry || Date.now() > otpExpiry) {
-    return res.status(400).json({ error: 'رمز التحقق منتهي الصلاحية أو غير موجود، يرجى طلب رمز جديد.' });
+// 14. Login (step 2: OTP)
+app.post('/api/auth/verify-otp', loginLimiter, (req, res) => {
+  const { otp, otpSessionId } = req.body;
+
+  const result = auth.verifyOtpSession(otpSessionId, typeof otp === 'string' ? otp.trim() : otp);
+  if (!result.ok) {
+    return res.status(401).json({ error: result.error });
   }
 
-  if (otp !== currentOtp) {
-    return res.status(401).json({ error: 'رمز التحقق غير صحيح!' });
-  }
+  res.json({ success: true, token: auth.issueToken() });
+});
 
-  // Clear OTP on success
-  currentOtp = null;
-  otpExpiry = null;
-
-  res.json({ success: true, token: 'session-active' });
+// 15. Session check — lets the frontend drop a stale token on startup
+app.get('/api/auth/me', auth.requireAuth, (req, res) => {
+  res.json({ ok: true, role: req.auth.role, expiresAt: req.auth.exp * 1000 });
 });
 
 // Set static folder for React frontend

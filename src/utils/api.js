@@ -1,178 +1,211 @@
 // Base URL configuration
-const API_BASE = import.meta.env.DEV 
-  ? 'http://localhost:5000/api' 
+const API_BASE = import.meta.env.DEV
+  ? 'http://localhost:5000/api'
   : '/api';
+
+const TOKEN_KEY = 'teller_session';
+
+// ─── Session token handling ───
+
+export const session = {
+  get: () => localStorage.getItem(TOKEN_KEY),
+  set: (token) => localStorage.setItem(TOKEN_KEY, token),
+  clear: () => localStorage.removeItem(TOKEN_KEY)
+};
+
+/** Called when the server rejects our token, so the UI can drop back to the login screen. */
+let onUnauthorized = () => {};
+export const setUnauthorizedHandler = (fn) => { onUnauthorized = fn; };
+
+async function readError(res, fallback) {
+  const data = await res.json().catch(() => ({}));
+  return new Error(data.error || fallback);
+}
+
+/**
+ * fetch wrapper that attaches the admin token and reacts to an expired session.
+ * Every owner-only endpoint goes through here.
+ */
+async function authFetch(path, options = {}) {
+  const token = session.get();
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {})
+    }
+  });
+
+  if (res.status === 401 || res.status === 403) {
+    session.clear();
+    onUnauthorized();
+    throw await readError(res, 'انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً');
+  }
+
+  return res;
+}
+
+/** fetch wrapper for public endpoints (login, shared statement). */
+async function publicFetch(path, options = {}) {
+  return fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {})
+    }
+  });
+}
 
 export const api = {
   // Get database summary
   getSummary: async () => {
-    const res = await fetch(`${API_BASE}/summary`);
-    if (!res.ok) throw new Error('فشل تحميل ملخص البيانات');
+    const res = await authFetch('/summary');
+    if (!res.ok) throw await readError(res, 'فشل تحميل ملخص البيانات');
     return res.json();
   },
 
   // Customers
   getCustomers: async () => {
-    const res = await fetch(`${API_BASE}/customers`);
-    if (!res.ok) throw new Error('فشل تحميل قائمة الزبائن');
+    const res = await authFetch('/customers');
+    if (!res.ok) throw await readError(res, 'فشل تحميل قائمة الزبائن');
     return res.json();
   },
 
   addCustomer: async (name, phone) => {
-    const res = await fetch(`${API_BASE}/customers`, {
+    const res = await authFetch('/customers', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, phone })
     });
-    if (!res.ok) throw new Error('فشل إضافة الزبون');
+    if (!res.ok) throw await readError(res, 'فشل إضافة الزبون');
     return res.json();
   },
 
   addTransaction: async (customerId, transactionData) => {
-    const res = await fetch(`${API_BASE}/customers/${customerId}/transactions`, {
+    const res = await authFetch(`/customers/${customerId}/transactions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(transactionData)
     });
-    if (!res.ok) throw new Error('فشل إضافة العملية الحسابية');
+    if (!res.ok) throw await readError(res, 'فشل إضافة العملية الحسابية');
     return res.json();
   },
 
   // Shared Statement API
-  toggleShareLink: async (customerId, isShared) => {
-    const res = await fetch(`${API_BASE}/customers/${customerId}/share`, {
+  // days: link lifetime; the server clamps it and mints a brand-new token each time.
+  toggleShareLink: async (customerId, isShared, days) => {
+    const res = await authFetch(`/customers/${customerId}/share`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isShared })
+      body: JSON.stringify({ isShared, days })
     });
-    if (!res.ok) throw new Error('فشل تعديل حالة الرابط');
+    if (!res.ok) throw await readError(res, 'فشل تعديل حالة الرابط');
     return res.json();
   },
 
   getSharedStatement: async (token, phone) => {
-    const res = await fetch(`${API_BASE}/shared/statement/${token}`, {
+    const res = await publicFetch(`/shared/statement/${token}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone })
     });
     if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error || 'فشل جلب الكشف، تأكد من صحة رقم الهاتف');
+      throw await readError(res, 'فشل جلب الكشف، تأكد من صحة رقم الهاتف');
     }
     return res.json();
   },
 
   // Expenses
   getExpenses: async () => {
-    const res = await fetch(`${API_BASE}/expenses`);
-    if (!res.ok) throw new Error('فشل تحميل المصاريف');
+    const res = await authFetch('/expenses');
+    if (!res.ok) throw await readError(res, 'فشل تحميل المصاريف');
     return res.json();
   },
 
   addExpense: async (title, amount, notes) => {
-    const res = await fetch(`${API_BASE}/expenses`, {
+    const res = await authFetch('/expenses', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title, amount, notes })
     });
-    if (!res.ok) throw new Error('فشل إضافة المصروف');
+    if (!res.ok) throw await readError(res, 'فشل إضافة المصروف');
     return res.json();
   },
 
   deleteExpense: async (id) => {
-    const res = await fetch(`${API_BASE}/expenses/${id}`, {
-      method: 'DELETE'
-    });
-    if (!res.ok) throw new Error('فشل حذف المصروف');
+    const res = await authFetch(`/expenses/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw await readError(res, 'فشل حذف المصروف');
     return res.json();
   },
 
   // Profits
   getProfits: async () => {
-    const res = await fetch(`${API_BASE}/profits`);
-    if (!res.ok) throw new Error('فشل تحميل حساب الأرباح');
+    const res = await authFetch('/profits');
+    if (!res.ok) throw await readError(res, 'فشل تحميل حساب الأرباح');
     return res.json();
   },
 
   // WhatsApp
   getWhatsAppStatus: async () => {
-    const res = await fetch(`${API_BASE}/whatsapp/status`);
-    if (!res.ok) throw new Error('فشل الاتصال بخادم الواتساب');
+    const res = await authFetch('/whatsapp/status');
+    if (!res.ok) throw await readError(res, 'فشل الاتصال بخادم الواتساب');
     return res.json();
   },
 
   logoutWhatsApp: async () => {
-    const res = await fetch(`${API_BASE}/whatsapp/logout`, {
-      method: 'POST'
-    });
-    if (!res.ok) throw new Error('فشل قطع اتصال الواتساب');
+    const res = await authFetch('/whatsapp/logout', { method: 'POST' });
+    if (!res.ok) throw await readError(res, 'فشل قطع اتصال الواتساب');
     return res.json();
   },
 
   pairPhone: async (phoneNumber) => {
-    const res = await fetch(`${API_BASE}/whatsapp/pair-phone`, {
+    const res = await authFetch('/whatsapp/pair-phone', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phoneNumber })
     });
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error || 'فشل طلب رمز الربط');
-    }
+    if (!res.ok) throw await readError(res, 'فشل طلب رمز الربط');
     return res.json();
   },
 
   sendStatement: async (statementData) => {
-    const res = await fetch(`${API_BASE}/whatsapp/send-statement`, {
+    const res = await authFetch('/whatsapp/send-statement', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(statementData)
     });
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error || 'فشل إرسال كشف الحساب بالواتساب');
-    }
+    if (!res.ok) throw await readError(res, 'فشل إرسال كشف الحساب بالواتساب');
     return res.json();
   },
 
   // PDF Generator API
   generatePdf: async (pdfData) => {
-    const res = await fetch(`${API_BASE}/pdf/generate`, {
+    const res = await authFetch('/pdf/generate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(pdfData)
     });
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error || `فشل توليد ملف الكشف PDF (Status: ${res.status}, URL: ${API_BASE}/pdf/generate)`);
-    }
+    if (!res.ok) throw await readError(res, 'فشل توليد ملف الكشف PDF');
     return res.json(); // returns { pdfBase64 }
   },
 
   // Auth API
   login: async (password) => {
-    const res = await fetch(`${API_BASE}/auth/login`, {
+    const res = await publicFetch('/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password })
     });
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error || 'فشل تسجيل الدخول');
-    }
+    if (!res.ok) throw await readError(res, 'فشل تسجيل الدخول');
     return res.json();
   },
 
-  verifyOtp: async (otp) => {
-    const res = await fetch(`${API_BASE}/auth/verify-otp`, {
+  verifyOtp: async (otp, otpSessionId) => {
+    const res = await publicFetch('/auth/verify-otp', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ otp })
+      body: JSON.stringify({ otp, otpSessionId })
     });
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error || 'فشل التحقق من الرمز');
-    }
+    if (!res.ok) throw await readError(res, 'فشل التحقق من الرمز');
+    return res.json();
+  },
+
+  // Validates the stored token on app start
+  checkSession: async () => {
+    const res = await authFetch('/auth/me');
+    if (!res.ok) throw await readError(res, 'جلسة غير صالحة');
     return res.json();
   }
 };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api } from './utils/api';
+import { api, session, setUnauthorizedHandler } from './utils/api';
 import CustomerList from './components/CustomerList';
 import TransactionForm from './components/TransactionForm';
 import Statements from './components/Statements';
@@ -14,6 +14,7 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [otp, setOtp] = useState('');
   const [otpSent, setOtpSent] = useState(false);
+  const [otpSessionId, setOtpSessionId] = useState(null);
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authWarning, setAuthWarning] = useState('');
@@ -39,15 +40,36 @@ export default function App() {
   const searchParams = new URLSearchParams(window.location.search);
   const sharedToken = searchParams.get('shared');
 
-  // Check auth session on mount
+  // Drop straight back to the login screen whenever the server rejects our token.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setIsAuthenticated(false);
+      setOtpSent(false);
+      setOtpSessionId(null);
+      setCustomers([]);
+    });
+  }, []);
+
+  // Validate the stored token with the server on mount — a token that merely exists
+  // in localStorage proves nothing.
   useEffect(() => {
     if (sharedToken) return; // Skip auth check if viewing a shared statement
-    
-    const token = localStorage.getItem('teller_session');
-    if (token) {
-      setIsAuthenticated(true);
-      loadCustomers();
-    }
+    if (!session.get()) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        await api.checkSession();
+        if (cancelled) return;
+        setIsAuthenticated(true);
+        loadCustomers();
+      } catch {
+        session.clear();
+        if (!cancelled) setIsAuthenticated(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
   }, [sharedToken]);
 
   // Fetch all customers data
@@ -74,11 +96,12 @@ export default function App() {
     try {
       const res = await api.login(password);
       if (res.requiresOTP) {
+        setOtpSessionId(res.otpSessionId);
         setOtpSent(true);
         setAuthWarning(res.message);
       } else {
-        // Logged in directly (e.g. if WhatsApp bot is not active)
-        localStorage.setItem('teller_session', res.token);
+        // Logged in directly (two-factor not configured for this install)
+        session.set(res.token);
         setIsAuthenticated(true);
         loadCustomers();
         if (res.warning) {
@@ -100,9 +123,13 @@ export default function App() {
 
     setAuthLoading(true);
     try {
-      const res = await api.verifyOtp(otp);
+      const res = await api.verifyOtp(otp, otpSessionId);
       if (res.success) {
-        localStorage.setItem('teller_session', res.token);
+        session.set(res.token);
+        setOtpSessionId(null);
+        setOtpSent(false);
+        setPassword('');
+        setOtp('');
         setIsAuthenticated(true);
         loadCustomers();
       }
@@ -116,9 +143,10 @@ export default function App() {
   // Handle Logout
   const handleLogout = () => {
     if (!window.confirm('هل أنت متأكد من تسجيل الخروج؟')) return;
-    localStorage.removeItem('teller_session');
+    session.clear();
     setIsAuthenticated(false);
     setOtpSent(false);
+    setOtpSessionId(null);
     setPassword('');
     setOtp('');
   };
@@ -242,7 +270,7 @@ export default function App() {
               <button 
                 type="button" 
                 className="btn btn-secondary btn-block" 
-                onClick={() => setOtpSent(false)} 
+                onClick={() => { setOtpSent(false); setOtpSessionId(null); setOtp(''); }}
                 style={{ marginTop: '1rem' }}
               >
                 رجوع للرمز الرئيسي

@@ -9,6 +9,14 @@ dotenv.config();
 
 const auth = require('./auth');
 const share = require('./sharedAccess');
+const store = require('./store');
+
+/** Maps a store error onto its HTTP status, defaulting to 500. */
+function sendStoreError(res, error, fallbackMessage) {
+  const status = error.status || 500;
+  if (status >= 500) console.error('[STORE ERROR]', error);
+  res.status(status).json({ error: error.message || fallbackMessage });
+}
 
 // Refuses to start when the admin password or JWT secret is missing.
 auth.assertConfigured();
@@ -150,20 +158,32 @@ app.get('/api/health', (req, res) => {
 // 1. Get database summary
 app.get('/api/summary', async (req, res) => {
   try {
-    const data = await readData();
-    res.json(data);
+    const [customers, expenses] = await Promise.all([
+      store.listCustomers(),
+      readData().then(d => d.expenses || [])
+    ]);
+    res.json({ customers, expenses });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendStoreError(res, error, 'فشل تحميل الملخص');
   }
 });
 
-// 2. Get all customers
+// 2. Get all customers (list view — transactions are fetched per customer)
 app.get('/api/customers', async (req, res) => {
   try {
-    const data = await readData();
-    res.json(data.customers || []);
+    res.json(await store.listCustomers());
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendStoreError(res, error, 'فشل تحميل قائمة الزبائن');
+  }
+});
+
+// 2.1 Get one customer with their ledger
+app.get('/api/customers/:id', async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 500, 2000);
+    res.json(await store.getCustomer(req.params.id, { limit }));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تحميل بيانات الزبون');
   }
 });
 
@@ -171,90 +191,74 @@ app.get('/api/customers', async (req, res) => {
 app.post('/api/customers', async (req, res) => {
   try {
     const { name, phone } = req.body;
-    if (!name) return res.status(400).json({ error: 'Name is required' });
-
-    const newCustomer = {
-      name,
-      phone: phone || '',
-      balance: 0,
-      transactions: [],
-      createdAt: new Date().toISOString()
-    };
-
-    if (db) {
-      const docRef = await db.collection('customers').add(newCustomer);
-      return res.status(201).json({ id: docRef.id, ...newCustomer });
-    } else {
-      const data = await readData();
-      const id = Date.now().toString();
-      const customerWithId = { id, ...newCustomer };
-      data.customers.push(customerWithId);
-      await writeData(data);
-      return res.status(201).json(customerWithId);
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'اسم الزبون مطلوب' });
     }
+
+    const customer = await store.addCustomer({ name: String(name).trim(), phone });
+    res.status(201).json(customer);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendStoreError(res, error, 'فشل إضافة الزبون');
   }
 });
 
-// 4. Add transaction to a customer
-// Balance equation: Deposits (give) increase, Withdrawals (take) decrease.
+// 4. Add a transaction (atomic: the ledger entry and the balance move together)
 app.post('/api/customers/:id/transactions', async (req, res) => {
   try {
-    const customerId = req.params.id;
-    const { type, amount, commission, notes } = req.body; // type: 'deposit' | 'withdrawal'
-
-    if (!type || !amount) {
-      return res.status(400).json({ error: 'Type and Amount are required' });
-    }
-
-    const numAmount = parseFloat(amount);
-    const numCommission = type === 'deposit' ? 0 : (parseFloat(commission) || 0);
-
-    const transaction = {
-      id: Date.now().toString(),
-      type, // 'deposit' (زبون عطاني) or 'withdrawal' (زبون سحب/حوالة)
-      amount: numAmount,
-      commission: numCommission,
-      notes: notes || '',
-      date: new Date().toISOString()
-    };
-
-    if (db) {
-      const docRef = db.collection('customers').doc(customerId);
-      const doc = await docRef.get();
-      if (!doc.exists) return res.status(404).json({ error: 'Customer not found' });
-
-      const customer = doc.data();
-      const currentTransactions = customer.transactions || [];
-      const updatedTransactions = [transaction, ...currentTransactions];
-      
-      // Update balance: for withdrawals, deduct amount + commission
-      let balanceChange = type === 'deposit' ? numAmount : -(numAmount + numCommission);
-      const newBalance = (customer.balance || 0) + balanceChange;
-
-      await docRef.update({
-        transactions: updatedTransactions,
-        balance: newBalance
-      });
-
-      return res.json({ id: customerId, ...customer, transactions: updatedTransactions, balance: newBalance });
-    } else {
-      const data = await readData();
-      const customer = data.customers.find(c => c.id === customerId);
-      if (!customer) return res.status(404).json({ error: 'Customer not found' });
-
-      if (!customer.transactions) customer.transactions = [];
-      customer.transactions.unshift(transaction);
-      
-      let balanceChange = type === 'deposit' ? numAmount : -(numAmount + numCommission);
-      customer.balance = (customer.balance || 0) + balanceChange;
-
-      await writeData(data);
-      return res.json(customer);
-    }
+    const result = await store.addTransaction(req.params.id, req.body, req.auth?.role || 'admin');
+    res.status(201).json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendStoreError(res, error, 'فشل إضافة العملية');
+  }
+});
+
+// 4.1 Edit a transaction — reverses the old effect and applies the new one
+app.patch('/api/customers/:id/transactions/:txId', async (req, res) => {
+  try {
+    const result = await store.updateTransaction(
+      req.params.id,
+      req.params.txId,
+      req.body,
+      req.auth?.role || 'admin'
+    );
+    res.json(result);
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تعديل العملية');
+  }
+});
+
+// 4.2 Delete a transaction — reverses its exact contribution to the balance
+app.delete('/api/customers/:id/transactions/:txId', async (req, res) => {
+  try {
+    const result = await store.deleteTransaction(
+      req.params.id,
+      req.params.txId,
+      req.auth?.role || 'admin'
+    );
+    res.json(result);
+  } catch (error) {
+    sendStoreError(res, error, 'فشل حذف العملية');
+  }
+});
+
+// 4.3 Rebuild a customer's balance from their ledger and report any drift
+app.post('/api/customers/:id/recompute', async (req, res) => {
+  try {
+    const result = await store.recomputeBalance(req.params.id, req.auth?.role || 'admin');
+    res.json(result);
+  } catch (error) {
+    sendStoreError(res, error, 'فشل إعادة حساب الرصيد');
+  }
+});
+
+// 4.4 Audit trail — who changed what, and what the values were before
+app.get('/api/audit-logs', async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const customerId = req.query.customerId || null;
+    res.json(await store.listAuditLogs({ limit, customerId }));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تحميل سجل التدقيق');
   }
 });
 
@@ -317,8 +321,7 @@ app.post('/api/shared/statement/:token', async (req, res) => {
       });
     }
 
-    const data = await readData();
-    const customer = data.customers.find(c => c.sharedToken === token && c.isSharedLinkActive);
+    const customer = await store.getCustomerByShareToken(token);
 
     if (!customer) {
       share.recordFailure(token);
@@ -416,20 +419,13 @@ app.delete('/api/expenses/:id', async (req, res) => {
 app.get('/api/profits', async (req, res) => {
   try {
     const data = await readData();
-    
-    // Calculate total commission from all customer transactions
-    let totalCustomerProfit = 0;
-    data.customers.forEach(customer => {
-      if (customer.transactions) {
-        customer.transactions.forEach(tx => {
-          totalCustomerProfit += parseFloat(tx.commission) || 0;
-        });
-      }
-    });
+
+    // Commissions now live in the transactions subcollection.
+    const totalCustomerProfit = await store.sumAllCommissions();
 
     // Calculate total general expenses
     let totalExpenses = 0;
-    data.expenses.forEach(exp => {
+    (data.expenses || []).forEach(exp => {
       totalExpenses += parseFloat(exp.amount) || 0;
     });
 
@@ -533,7 +529,18 @@ app.post('/api/pdf/generate', async (req, res) => {
       return res.status(400).json({ error: 'CustomerName and transactions are required' });
     }
     const { generatePdfBase64 } = require('./utils/pdfHelper');
-    const base64 = await generatePdfBase64(req.body);
+    const { periodText, balance, openingBalance, finalBalance } = req.body;
+
+    // The helper takes positional arguments — passing req.body as one object made
+    // the customer name an object and dropped every transaction.
+    const base64 = await generatePdfBase64(
+      customerName,
+      transactions,
+      periodText,
+      balance,
+      openingBalance,
+      finalBalance
+    );
     res.json({ pdfBase64: base64 });
   } catch (error) {
     console.error('[PDF ERROR]', error);

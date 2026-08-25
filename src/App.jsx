@@ -72,6 +72,31 @@ export default function App() {
     return () => { cancelled = true; };
   }, [sharedToken]);
 
+  // Opens the statement view for one customer, pulling their ledger from the server.
+  // The list endpoint returns balances only, so the transactions are fetched here.
+  const openCustomerStatement = async (customer) => {
+    setLoading(true);
+    try {
+      const full = await api.getCustomer(customer.id);
+      setSelectedCustomer(full);
+    } catch (err) {
+      window.alert(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Re-reads the open customer after an edit or a delete.
+  const refreshSelectedCustomer = async () => {
+    if (!selectedCustomer) return;
+    try {
+      const full = await api.getCustomer(selectedCustomer.id);
+      setSelectedCustomer(full);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   // Fetch all customers data
   const loadCustomers = async () => {
     setLoading(true);
@@ -377,6 +402,7 @@ export default function App() {
           /* Detailed Statement View */
           <Statements
             customer={selectedCustomer}
+            onLedgerChanged={refreshSelectedCustomer}
             onBack={() => {
               setSelectedCustomer(null);
               loadCustomers(); // reload to get any balance updates
@@ -388,7 +414,7 @@ export default function App() {
             {activeTab === 'customers' && (
               <CustomerList
                 customers={customers}
-                onSelectCustomer={(cust) => setSelectedCustomer(cust)}
+                onSelectCustomer={openCustomerStatement}
                 onOpenTransaction={(cust) => setActiveTransactionCustomer(cust)}
                 onOpenAddCustomer={() => setShowAddCustomerModal(true)}
               />

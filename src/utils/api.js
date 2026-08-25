@@ -82,12 +82,49 @@ export const api = {
     return res.json();
   },
 
+  // One customer with their ledger — the list endpoint no longer carries transactions.
+  getCustomer: async (customerId) => {
+    const res = await authFetch(`/customers/${customerId}`);
+    if (!res.ok) throw await readError(res, 'فشل تحميل بيانات الزبون');
+    return res.json();
+  },
+
   addTransaction: async (customerId, transactionData) => {
     const res = await authFetch(`/customers/${customerId}/transactions`, {
       method: 'POST',
       body: JSON.stringify(transactionData)
     });
     if (!res.ok) throw await readError(res, 'فشل إضافة العملية الحسابية');
+    return res.json();
+  },
+
+  updateTransaction: async (customerId, txId, transactionData) => {
+    const res = await authFetch(`/customers/${customerId}/transactions/${txId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(transactionData)
+    });
+    if (!res.ok) throw await readError(res, 'فشل تعديل العملية');
+    return res.json();
+  },
+
+  deleteTransaction: async (customerId, txId) => {
+    const res = await authFetch(`/customers/${customerId}/transactions/${txId}`, {
+      method: 'DELETE'
+    });
+    if (!res.ok) throw await readError(res, 'فشل حذف العملية');
+    return res.json();
+  },
+
+  recomputeBalance: async (customerId) => {
+    const res = await authFetch(`/customers/${customerId}/recompute`, { method: 'POST' });
+    if (!res.ok) throw await readError(res, 'فشل إعادة حساب الرصيد');
+    return res.json();
+  },
+
+  getAuditLogs: async (customerId) => {
+    const query = customerId ? `?customerId=${encodeURIComponent(customerId)}` : '';
+    const res = await authFetch(`/audit-logs${query}`);
+    if (!res.ok) throw await readError(res, 'فشل تحميل سجل التدقيق');
     return res.json();
   },
 

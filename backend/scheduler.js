@@ -1,31 +1,13 @@
 const cron = require('node-cron');
-const { db } = require('./firebaseAdmin');
 const { sendStatementPDF, getWhatsAppStatus } = require('./whatsapp');
 const { generatePdfBase64 } = require('./utils/pdfHelper');
-const fs = require('fs-extra');
-const path = require('path');
+const store = require('./store');
 
-const LOCAL_DB_PATH = path.join(__dirname, 'data', 'database.json');
-
-// Helper to read data (similar to server.js)
 async function readCustomers() {
-  if (db) {
-    try {
-      const customersSnap = await db.collection('customers').get();
-      const customers = [];
-      customersSnap.forEach(doc => {
-        customers.push({ id: doc.id, ...doc.data() });
-      });
-      return customers;
-    } catch (e) {
-      console.error("Firebase read error in scheduler, falling back to local file:", e);
-    }
-  }
-
   try {
-    const data = await fs.readJson(LOCAL_DB_PATH);
-    return data?.customers || [];
-  } catch (err) {
+    return await store.listCustomers();
+  } catch (e) {
+    console.error('[Scheduler] Failed to read customers:', e.message);
     return [];
   }
 }
@@ -48,12 +30,19 @@ async function sendWeeklyStatements() {
     let sentCount = 0;
 
     for (const customer of customers) {
-      if (!customer.phone || !customer.transactions || customer.transactions.length === 0) {
+      if (!customer.phone) continue;
+
+      // The list view no longer carries transactions — load this customer's ledger.
+      let ledger;
+      try {
+        ledger = (await store.getCustomer(customer.id)).transactions || [];
+      } catch (e) {
+        console.error(`[Scheduler] Could not load ledger for ${customer.name}:`, e.message);
         continue;
       }
 
       // Filter transactions for the last 7 days
-      const weeklyTransactions = customer.transactions.filter(tx => {
+      const weeklyTransactions = ledger.filter(tx => {
         const txDate = new Date(tx.date);
         return txDate >= oneWeekAgo;
       });

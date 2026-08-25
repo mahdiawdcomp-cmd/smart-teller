@@ -1,8 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../utils/api';
-import { FileText, Send, Download, Calendar, User, ArrowLeft, Loader } from 'lucide-react';
+import { FileText, Send, Download, Calendar, User, ArrowLeft, Loader, Pencil, Trash2, History, RefreshCw } from 'lucide-react';
 
-export default function Statements({ customer, onBack }) {
+/** Renders an audit-log snapshot as a short Arabic line. */
+function describeAuditValue(value) {
+  if (!value) return '—';
+
+  if (typeof value.balance === 'number' && value.type === undefined) {
+    return `الرصيد: ${value.balance.toLocaleString('en-US')} د.ع`;
+  }
+
+  const label = value.type === 'deposit' ? 'إيداع' : 'سحب';
+  const total = (Number(value.amount) || 0) + (value.type === 'withdrawal' ? (Number(value.commission) || 0) : 0);
+  const commission = Number(value.commission) || 0;
+
+  return `${label} ${total.toLocaleString('en-US')} د.ع` +
+    (commission > 0 ? ` (عمولة ${commission.toLocaleString('en-US')})` : '') +
+    (value.notes ? ` — ${value.notes}` : '');
+}
+
+export default function Statements({ customer, onBack, onLedgerChanged }) {
   const [filter, setFilter] = useState('all'); // 'all' | 'month' | 'prev_month' | 'custom'
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -16,6 +33,17 @@ export default function Statements({ customer, onBack }) {
   const [isShared, setIsShared] = useState(customer?.isSharedLinkActive || false);
   const [sharedToken, setSharedToken] = useState(customer?.sharedToken || null);
   const [linkActionLoading, setLinkActionLoading] = useState(false);
+
+  // Ledger editing state
+  const [editingTx, setEditingTx] = useState(null); // the transaction being edited
+  const [editForm, setEditForm] = useState({ type: 'deposit', amount: '', commission: '', notes: '' });
+  const [ledgerBusy, setLedgerBusy] = useState(false);
+  const [editError, setEditError] = useState('');
+
+  // Audit trail state
+  const [showAudit, setShowAudit] = useState(false);
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [auditLoading, setAuditLoading] = useState(false);
 
   // Apply filters
   useEffect(() => {
@@ -247,6 +275,112 @@ export default function Statements({ customer, onBack }) {
     });
   };
 
+  // 5. Ledger editing — every change goes through the server, which reverses the
+  // old effect on the balance and applies the new one in one atomic step.
+  const openEdit = (tx) => {
+    setEditError('');
+    setEditingTx(tx);
+    setEditForm({
+      type: tx.type,
+      amount: String(tx.amount ?? ''),
+      commission: String(tx.commission ?? ''),
+      notes: tx.notes || ''
+    });
+  };
+
+  const handleSaveEdit = async (e) => {
+    e.preventDefault();
+    setEditError('');
+
+    const amount = Number(editForm.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setEditError('المبلغ يجب أن يكون رقماً أكبر من صفر');
+      return;
+    }
+
+    setLedgerBusy(true);
+    try {
+      await api.updateTransaction(customer.id, editingTx.id, {
+        type: editForm.type,
+        amount,
+        commission: editForm.type === 'deposit' ? 0 : (Number(editForm.commission) || 0),
+        notes: editForm.notes,
+        date: editingTx.date // editing values, not moving the operation in time
+      });
+
+      setEditingTx(null);
+      setStatusMessage('تم تعديل العملية وتصحيح الرصيد ✅');
+      setTimeout(() => setStatusMessage(''), 3000);
+      if (onLedgerChanged) await onLedgerChanged();
+      if (showAudit) loadAuditLogs();
+    } catch (err) {
+      setEditError(err.message);
+    } finally {
+      setLedgerBusy(false);
+    }
+  };
+
+  const handleDeleteTx = async (tx) => {
+    const total = tx.amount + (tx.type === 'withdrawal' ? (tx.commission || 0) : 0);
+    const confirmText =
+      `حذف هذه العملية نهائياً؟\n\n` +
+      `${tx.type === 'deposit' ? 'إيداع' : 'سحب/حوالة'}: ${Number(total).toLocaleString('en-US')} د.ع\n` +
+      `بتاريخ: ${new Date(tx.date).toLocaleString('ar-EG')}\n\n` +
+      `سيتم تصحيح الرصيد تلقائياً، وسيبقى الحذف مسجلاً في سجل التدقيق.`;
+
+    if (!window.confirm(confirmText)) return;
+
+    setLedgerBusy(true);
+    try {
+      await api.deleteTransaction(customer.id, tx.id);
+      setStatusMessage('تم حذف العملية وتصحيح الرصيد 🗑️');
+      setTimeout(() => setStatusMessage(''), 3000);
+      if (onLedgerChanged) await onLedgerChanged();
+      if (showAudit) loadAuditLogs();
+    } catch (err) {
+      setStatusMessage(`خطأ: ${err.message}`);
+    } finally {
+      setLedgerBusy(false);
+    }
+  };
+
+  // Rebuilds the balance from the ledger — the safety check that the stored
+  // number still agrees with the operations behind it.
+  const handleRecompute = async () => {
+    setLedgerBusy(true);
+    try {
+      const res = await api.recomputeBalance(customer.id);
+      setStatusMessage(
+        res.drift === 0
+          ? 'الرصيد مطابق تماماً لمجموع العمليات ✅'
+          : `تم تصحيح الرصيد: من ${res.storedBalance.toLocaleString('en-US')} إلى ${res.computedBalance.toLocaleString('en-US')} د.ع`
+      );
+      setTimeout(() => setStatusMessage(''), 5000);
+      if (onLedgerChanged) await onLedgerChanged();
+    } catch (err) {
+      setStatusMessage(`خطأ: ${err.message}`);
+    } finally {
+      setLedgerBusy(false);
+    }
+  };
+
+  const loadAuditLogs = async () => {
+    setAuditLoading(true);
+    try {
+      setAuditLogs(await api.getAuditLogs(customer.id));
+    } catch (err) {
+      setStatusMessage(`خطأ في تحميل السجل: ${err.message}`);
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  const toggleAudit = () => {
+    const next = !showAudit;
+    setShowAudit(next);
+    if (next) loadAuditLogs();
+  };
+
   // Calculate totals for selected filtered transactions
   const totalDeposits = filteredTransactions
     .filter(t => t.type === 'deposit')
@@ -468,8 +602,20 @@ export default function Statements({ customer, onBack }) {
       </div>
 
       {/* Transactions Ledger Table */}
-      <h3>جدول العمليات للفترة المحددة ({getPeriodText()})</h3>
-      
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <h3 style={{ margin: 0 }}>جدول العمليات للفترة المحددة ({getPeriodText()})</h3>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button className="btn btn-secondary" onClick={handleRecompute} disabled={ledgerBusy} style={{ padding: '0.5rem 1rem' }}>
+            <RefreshCw size={16} />
+            تدقيق الرصيد
+          </button>
+          <button className="btn btn-secondary" onClick={toggleAudit} style={{ padding: '0.5rem 1rem' }}>
+            <History size={16} />
+            {showAudit ? 'إخفاء سجل التعديلات' : 'سجل التعديلات'}
+          </button>
+        </div>
+      </div>
+
       {filteredTransactions.length === 0 ? (
         <p style={{ textAlign: 'center', color: 'var(--text-muted)', margin: '3rem 0' }}>
           لا توجد عمليات مسجلة في هذه الفترة المحددة.
@@ -483,6 +629,7 @@ export default function Statements({ customer, onBack }) {
                 <th>نوع العملية</th>
                 <th>المبلغ الإجمالي (د.ع)</th>
                 <th>الملاحظات</th>
+                <th style={{ width: '120px' }}>إجراءات</th>
               </tr>
             </thead>
             <tbody>
@@ -507,12 +654,159 @@ export default function Statements({ customer, onBack }) {
                     </td>
                     <td style={{ fontSize: '16px', color: 'var(--text-dark)' }}>
                       {displayNotes}
+                      {tx.editedAt && (
+                        <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)' }}>
+                          (عُدّلت بتاريخ {new Date(tx.editedAt).toLocaleString('ar-EG')})
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: '0.35rem' }}>
+                        <button
+                          className="btn btn-secondary"
+                          onClick={() => openEdit(tx)}
+                          disabled={ledgerBusy}
+                          title="تعديل العملية"
+                          style={{ padding: '0.4rem 0.6rem' }}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button
+                          className="btn btn-danger"
+                          onClick={() => handleDeleteTx(tx)}
+                          disabled={ledgerBusy}
+                          title="حذف العملية"
+                          style={{ padding: '0.4rem 0.6rem' }}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Audit trail — what changed, and what the value was before */}
+      {showAudit && (
+        <div className="panel-card" style={{ marginTop: '2rem', backgroundColor: 'var(--bg-light)' }}>
+          <h3 style={{ marginTop: 0 }}>سجل التعديلات والحذف</h3>
+
+          {auditLoading ? (
+            <p style={{ color: 'var(--text-muted)' }}>جاري التحميل...</p>
+          ) : auditLogs.length === 0 ? (
+            <p style={{ color: 'var(--text-muted)' }}>لا توجد تعديلات مسجلة على هذا الحساب.</p>
+          ) : (
+            <div className="table-wrapper">
+              <table className="app-table">
+                <thead>
+                  <tr>
+                    <th>التاريخ</th>
+                    <th>الإجراء</th>
+                    <th>قبل</th>
+                    <th>بعد</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {auditLogs.map(log => (
+                    <tr key={log.id}>
+                      <td style={{ fontSize: '14px' }}>{new Date(log.at).toLocaleString('ar-EG')}</td>
+                      <td>
+                        <span className={`badge ${log.action === 'delete' ? 'badge-withdrawal' : 'badge-deposit'}`}>
+                          {log.action === 'create' && 'إضافة'}
+                          {log.action === 'update' && 'تعديل'}
+                          {log.action === 'delete' && 'حذف'}
+                          {log.action === 'recompute' && 'تصحيح رصيد'}
+                        </span>
+                      </td>
+                      <td style={{ fontSize: '14px' }}>{describeAuditValue(log.before)}</td>
+                      <td style={{ fontSize: '14px' }}>{describeAuditValue(log.after)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Edit transaction modal */}
+      {editingTx && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <div className="panel-header">
+              <h2>تعديل العملية</h2>
+            </div>
+
+            <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: 0 }}>
+              بتاريخ {new Date(editingTx.date).toLocaleString('ar-EG')} — سيتم تصحيح الرصيد تلقائياً بعد الحفظ.
+            </p>
+
+            {editError && <div className="toast toast-error">{editError}</div>}
+
+            <form onSubmit={handleSaveEdit}>
+              <div className="form-group">
+                <label>نوع العملية *</label>
+                <select
+                  className="form-input"
+                  value={editForm.type}
+                  onChange={e => setEditForm({ ...editForm, type: e.target.value })}
+                >
+                  <option value="deposit">إيداع (ينطيني)</option>
+                  <option value="withdrawal">سحب/حوالة (ياخذ)</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>المبلغ (د.ع) *</label>
+                <input
+                  type="number"
+                  className="form-input"
+                  value={editForm.amount}
+                  onChange={e => setEditForm({ ...editForm, amount: e.target.value })}
+                  required
+                  min="1"
+                  style={{ direction: 'ltr', textAlign: 'left' }}
+                />
+              </div>
+
+              {editForm.type === 'withdrawal' && (
+                <div className="form-group">
+                  <label>العمولة (د.ع)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={editForm.commission}
+                    onChange={e => setEditForm({ ...editForm, commission: e.target.value })}
+                    min="0"
+                    style={{ direction: 'ltr', textAlign: 'left' }}
+                  />
+                </div>
+              )}
+
+              <div className="form-group">
+                <label>الملاحظات</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={editForm.notes}
+                  onChange={e => setEditForm({ ...editForm, notes: e.target.value })}
+                />
+              </div>
+
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setEditingTx(null)} disabled={ledgerBusy}>
+                  إلغاء
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={ledgerBusy}>
+                  {ledgerBusy ? 'جاري الحفظ...' : 'حفظ التعديل'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 

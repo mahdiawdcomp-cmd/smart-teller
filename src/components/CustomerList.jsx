@@ -50,7 +50,7 @@ export default function CustomerList({
         </p>
       ) : (
         <div className="table-wrapper">
-          <table className="app-table">
+          <table className="app-table cards-on-mobile">
             <thead>
               <tr>
                 <th>اسم الزبون</th>
@@ -65,29 +65,29 @@ export default function CustomerList({
                 const isCredit = (c.balance || 0) >= 0;
                 return (
                   <tr key={c.id}>
-                    <td style={{ fontWeight: 'bold', fontSize: '20px' }}>
+                    <td data-label="الزبون" style={{ fontWeight: 'bold', fontSize: '20px' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
                         <User size={18} color="var(--primary)" />
                         {c.name}
                       </span>
                     </td>
-                    <td style={{ fontSize: '18px', color: 'var(--text-muted)' }}>
+                    <td data-label="الهاتف" style={{ fontSize: '18px', color: 'var(--text-muted)' }}>
                       {c.phone || '-'}
                     </td>
-                    <td>
+                    <td data-label="الحالة">
                       <span className={`badge ${isCredit ? 'badge-deposit' : 'badge-withdrawal'}`} style={{ fontSize: '14px' }}>
                         {isCredit ? 'مطلب (له)' : 'مطلوب (عليه)'}
                       </span>
                     </td>
-                    <td style={{ 
+                    <td data-label="الرصيد" style={{ 
                       fontWeight: '900', 
                       fontSize: '20px',
                       color: isCredit ? 'var(--success)' : 'var(--danger)' 
                     }}>
                       {Math.abs(c.balance || 0).toLocaleString('en-US')} د.ع
                     </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'inline-flex', gap: '0.75rem' }}>
+                    <td data-label="" style={{ textAlign: 'center' }}>
+                      <div className="action-group" style={{ display: 'inline-flex', gap: '0.75rem' }}>
                         
                         {/* Add Transaction Button */}
                         <button

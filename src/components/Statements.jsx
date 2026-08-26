@@ -647,7 +647,7 @@ export default function Statements({ customer, onBack, onLedgerChanged, permissi
         </p>
       ) : (
         <div className="table-wrapper">
-          <table className="app-table">
+          <table className="app-table cards-on-mobile">
             <thead>
               <tr>
                 <th>التاريخ والوقت</th>
@@ -666,18 +666,18 @@ export default function Statements({ customer, onBack, onLedgerChanged, permissi
 
                 return (
                   <tr key={tx.id}>
-                    <td style={{ fontSize: '15px' }}>
+                    <td data-label="التاريخ" style={{ fontSize: '15px' }}>
                       {new Date(tx.date).toLocaleString('ar-EG')}
                     </td>
-                    <td>
+                    <td data-label="النوع">
                       <span className={`badge ${tx.type === 'deposit' ? 'badge-deposit' : 'badge-withdrawal'}`}>
                         {tx.type === 'deposit' ? 'إيداع (ينطيني)' : 'سحب/حوالة (ياخذ)'}
                       </span>
                     </td>
-                    <td style={{ fontWeight: 'bold', color: tx.type === 'deposit' ? 'var(--success)' : 'var(--danger)' }}>
+                    <td data-label="المبلغ" style={{ fontWeight: 'bold', color: tx.type === 'deposit' ? 'var(--success)' : 'var(--danger)' }}>
                       {Number(totalAmount).toLocaleString('en-US')} د.ع
                     </td>
-                    <td style={{ fontSize: '16px', color: 'var(--text-dark)' }}>
+                    <td data-label="ملاحظات" style={{ fontSize: '16px', color: 'var(--text-dark)' }}>
                       {displayNotes}
                       {tx.editedAt && (
                         <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)' }}>
@@ -685,8 +685,8 @@ export default function Statements({ customer, onBack, onLedgerChanged, permissi
                         </span>
                       )}
                     </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: '0.35rem' }}>
+                    <td data-label="">
+                      <div className="action-group" style={{ display: 'flex', gap: '0.35rem' }}>
                         <button
                           className="btn btn-secondary"
                           onClick={() => handleReceipt(tx, false)}

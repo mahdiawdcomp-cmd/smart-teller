@@ -10,6 +10,7 @@ import Reports from './components/Reports';
 import BackupPanel from './components/BackupPanel';
 import UsersPanel from './components/UsersPanel';
 import TransactionSearch from './components/TransactionSearch';
+import WelcomeTour, { shouldShowTour, resetTour } from './components/WelcomeTour';
 import SharedStatementView from './components/SharedStatementView';
 import { Landmark, Users, ArrowUpRight, ArrowDownRight, LogOut, Key, Phone, ShieldCheck } from 'lucide-react';
 
@@ -52,6 +53,9 @@ export default function App() {
   const [editCustError, setEditCustError] = useState('');
   const [editCustBusy, setEditCustBusy] = useState(false);
 
+  // The welcome tour: three showings per account, then it stops on its own.
+  const [showTour, setShowTour] = useState(false);
+
   const permissions = currentUser?.permissions || {};
 
   // Check URL for shared statement token
@@ -82,6 +86,7 @@ export default function App() {
         if (cancelled) return;
         setCurrentUser(me.user);
         setIsAuthenticated(true);
+        setShowTour(shouldShowTour(me.user));
         loadCustomers();
       } catch {
         session.clear();
@@ -148,6 +153,7 @@ export default function App() {
         // Logged in directly (staff account, or two-factor not configured)
         session.set(res.token);
         setCurrentUser(res.user);
+        setShowTour(shouldShowTour(res.user));
         setIsAuthenticated(true);
         loadCustomers();
         if (res.warning) {
@@ -173,6 +179,7 @@ export default function App() {
       if (res.success) {
         session.set(res.token);
         setCurrentUser(res.user);
+        setShowTour(shouldShowTour(res.user));
         setOtpSessionId(null);
         setOtpSent(false);
         setPassword('');
@@ -575,6 +582,19 @@ export default function App() {
                 <WhatsAppSetup />
                 <BackupPanel />
                 {permissions.canManageUsers && <UsersPanel />}
+
+                <div className="panel-card" style={{ marginTop: '1.5rem' }}>
+                  <h3 style={{ marginTop: 0 }}>شرح الموقع</h3>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>
+                    دليل سريع يشرح كل شاشة خطوة خطوة.
+                  </p>
+                  <button
+                    className="btn btn-primary btn-block"
+                    onClick={() => { resetTour(currentUser.id); setShowTour(true); }}
+                  >
+                    افتح شرح الموقع
+                  </button>
+                </div>
               </>
             )}
           </>
@@ -682,6 +702,11 @@ export default function App() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* The welcome tour, shown over the app on the first few sign-ins */}
+      {showTour && currentUser && (
+        <WelcomeTour user={currentUser} onClose={() => setShowTour(false)} />
       )}
 
       {/* 1.5 Modal for editing / merging a customer */}

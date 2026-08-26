@@ -67,9 +67,13 @@ app.use((req, res, next) => {
   res.setHeader('Content-Security-Policy',
     "default-src 'self'; " +
     "script-src 'self'; " +
-    "style-src 'self' 'unsafe-inline'; " +   // inline styles are used throughout the UI
-    "img-src 'self' data:; " +               // QR codes arrive as data URLs
-    "font-src 'self' data:; " +
+    // The UI creates a worker from a blob; without this the page half-loads.
+    "worker-src 'self' blob:; " +
+    // Inline styles are used throughout the UI, and the Arabic font (Tajawal)
+    // is a Google Fonts stylesheet — blocking it silently changes every screen.
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "font-src 'self' data: https://fonts.gstatic.com; " +
+    "img-src 'self' data: blob:; " +         // QR codes arrive as data URLs
     "connect-src 'self'; " +
     "object-src 'none'; " +
     "base-uri 'none'; " +

@@ -10,6 +10,7 @@ dotenv.config();
 const auth = require('./auth');
 const share = require('./sharedAccess');
 const store = require('./store');
+const users = require('./users');
 
 /** Maps a store error onto its HTTP status, defaulting to 500. */
 function sendStoreError(res, error, fallbackMessage) {
@@ -158,6 +159,10 @@ const loginLimiter = rateLimit({
   message: { error: 'محاولات كثيرة جداً، يرجى الانتظار 15 دقيقة ثم المحاولة مجدداً.' }
 });
 
+// Maps a pending OTP session to the account that started it, so a delivered
+// code can only ever complete the login it was issued for.
+const pendingOtpUsers = new Map();
+
 // --- API ROUTES ---
 
 // 0. Health check (public, used by uptime monitors)
@@ -168,9 +173,13 @@ app.get('/api/health', (req, res) => {
 // 1. Get database summary
 app.get('/api/summary', async (req, res) => {
   try {
+    // Expenses are an owner-only figure; the gated /api/expenses route would
+    // refuse a staff account, so this one must not hand them over either.
+    const canSeeExpenses = users.permissionsFor(req.auth?.role).canViewReports;
+
     const [customers, expenses] = await Promise.all([
       store.listCustomers(),
-      readData().then(d => d.expenses || [])
+      canSeeExpenses ? readData().then(d => d.expenses || []) : Promise.resolve([])
     ]);
     res.json({ customers, expenses });
   } catch (error) {
@@ -205,6 +214,21 @@ app.post('/api/customers', async (req, res) => {
       return res.status(400).json({ error: 'اسم الزبون مطلوب' });
     }
 
+    // A duplicate customer splits one person's money across two accounts and
+    // neither balance is right, so the server refuses until it is confirmed.
+    if (req.query.force !== 'true') {
+      const duplicates = await store.findPossibleDuplicates({ name, phone });
+      if (duplicates.length > 0) {
+        return res.status(409).json({
+          error: 'يوجد زبون مشابه مسجّل مسبقاً',
+          code: 'POSSIBLE_DUPLICATE',
+          duplicates: duplicates.map(d => ({
+            id: d.id, name: d.name, phone: d.phone, balance: d.balance
+          }))
+        });
+      }
+    }
+
     const customer = await store.addCustomer({ name: String(name).trim(), phone });
     res.status(201).json(customer);
   } catch (error) {
@@ -212,10 +236,57 @@ app.post('/api/customers', async (req, res) => {
   }
 });
 
+// 3.1 Edit a customer's details (admin only — a renamed customer changes every
+// statement they have ever received)
+app.patch('/api/customers/:id', auth.requirePermission('canManageCustomers'), async (req, res) => {
+  try {
+    res.json(await store.updateCustomer(req.params.id, req.body));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تعديل بيانات الزبون');
+  }
+});
+
+// 3.2 Merge a duplicate customer into the real one
+app.post('/api/customers/:id/merge', auth.requirePermission('canManageCustomers'), async (req, res) => {
+  try {
+    const { targetId } = req.body;
+    if (!targetId) return res.status(400).json({ error: 'يجب تحديد الزبون الهدف' });
+
+    res.json(await store.mergeCustomers(req.params.id, targetId, auth.actorLabel(req)));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل دمج الزبائن');
+  }
+});
+
+// 3.3 Ask whether a name/phone looks like an existing customer
+app.get('/api/customers-duplicates/check', async (req, res) => {
+  try {
+    const { name, phone, excludeId } = req.query;
+    res.json(await store.findPossibleDuplicates({ name, phone, excludeId: excludeId || null }));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل فحص التكرار');
+  }
+});
+
 // 4. Add a transaction (atomic: the ledger entry and the balance move together)
 app.post('/api/customers/:id/transactions', async (req, res) => {
   try {
-    const result = await store.addTransaction(req.params.id, req.body, req.auth?.role || 'admin');
+    // Idempotency: a teller on a weak connection presses save, sees nothing, and
+    // presses again. Replaying the stored result beats recording the money twice.
+    // Scoped to the customer: the same key can never replay onto another account.
+    const rawKey = req.get('Idempotency-Key') || req.body.idempotencyKey || null;
+    const key = rawKey ? `${req.params.id}:${rawKey}` : null;
+
+    if (key) {
+      const previous = await store.getIdempotentResult(key);
+      if (previous) {
+        return res.status(200).json({ ...previous, replayed: true });
+      }
+    }
+
+    const result = await store.addTransaction(req.params.id, req.body, auth.actorLabel(req));
+    if (key) await store.saveIdempotentResult(key, result);
+
     res.status(201).json(result);
   } catch (error) {
     sendStoreError(res, error, 'فشل إضافة العملية');
@@ -223,13 +294,13 @@ app.post('/api/customers/:id/transactions', async (req, res) => {
 });
 
 // 4.1 Edit a transaction — reverses the old effect and applies the new one
-app.patch('/api/customers/:id/transactions/:txId', async (req, res) => {
+app.patch('/api/customers/:id/transactions/:txId', auth.requirePermission('canEditLedger'), async (req, res) => {
   try {
     const result = await store.updateTransaction(
       req.params.id,
       req.params.txId,
       req.body,
-      req.auth?.role || 'admin'
+      auth.actorLabel(req)
     );
     res.json(result);
   } catch (error) {
@@ -238,12 +309,12 @@ app.patch('/api/customers/:id/transactions/:txId', async (req, res) => {
 });
 
 // 4.2 Delete a transaction — reverses its exact contribution to the balance
-app.delete('/api/customers/:id/transactions/:txId', async (req, res) => {
+app.delete('/api/customers/:id/transactions/:txId', auth.requirePermission('canEditLedger'), async (req, res) => {
   try {
     const result = await store.deleteTransaction(
       req.params.id,
       req.params.txId,
-      req.auth?.role || 'admin'
+      auth.actorLabel(req)
     );
     res.json(result);
   } catch (error) {
@@ -252,9 +323,9 @@ app.delete('/api/customers/:id/transactions/:txId', async (req, res) => {
 });
 
 // 4.3 Rebuild a customer's balance from their ledger and report any drift
-app.post('/api/customers/:id/recompute', async (req, res) => {
+app.post('/api/customers/:id/recompute', auth.requirePermission('canEditLedger'), async (req, res) => {
   try {
-    const result = await store.recomputeBalance(req.params.id, req.auth?.role || 'admin');
+    const result = await store.recomputeBalance(req.params.id, auth.actorLabel(req));
     res.json(result);
   } catch (error) {
     sendStoreError(res, error, 'فشل إعادة حساب الرصيد');
@@ -262,7 +333,7 @@ app.post('/api/customers/:id/recompute', async (req, res) => {
 });
 
 // 4.4 Audit trail — who changed what, and what the values were before
-app.get('/api/audit-logs', async (req, res) => {
+app.get('/api/audit-logs', auth.requirePermission('canEditLedger'), async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 100, 500);
     const customerId = req.query.customerId || null;
@@ -369,7 +440,7 @@ app.post('/api/shared/statement/:token', async (req, res) => {
 });
 
 // 5. Get all expenses
-app.get('/api/expenses', async (req, res) => {
+app.get('/api/expenses', auth.requirePermission('canViewReports'), async (req, res) => {
   try {
     const data = await readData();
     res.json(data.expenses || []);
@@ -379,16 +450,30 @@ app.get('/api/expenses', async (req, res) => {
 });
 
 // 6. Add new expense
-app.post('/api/expenses', async (req, res) => {
+app.post('/api/expenses', auth.requirePermission('canViewReports'), async (req, res) => {
   try {
-    const { title, amount, notes } = req.body;
-    if (!title || !amount) return res.status(400).json({ error: 'Title and Amount are required' });
+    const { title, amount, notes, date } = req.body;
+    if (!title || !amount) return res.status(400).json({ error: 'يجب إدخال العنوان والمبلغ' });
+
+    const parsedAmount = store.roundMoney(amount);
+    if (!Number.isFinite(Number(amount)) || parsedAmount <= 0) {
+      return res.status(400).json({ error: 'المبلغ يجب أن يكون رقماً أكبر من صفر' });
+    }
+
+    // Expenses can be backdated: the office records yesterday's rent today.
+    const when = date ? new Date(date) : new Date();
+    if (Number.isNaN(when.getTime())) {
+      return res.status(400).json({ error: 'تاريخ المصروف غير صحيح' });
+    }
+    if (when.getTime() > Date.now() + 60_000) {
+      return res.status(400).json({ error: 'لا يمكن تسجيل مصروف بتاريخ مستقبلي' });
+    }
 
     const newExpense = {
       title,
-      amount: parseFloat(amount),
+      amount: parsedAmount,
       notes: notes || '',
-      date: new Date().toISOString()
+      date: when.toISOString()
     };
 
     if (db) {
@@ -405,7 +490,7 @@ app.post('/api/expenses', async (req, res) => {
 });
 
 // 7. Delete an expense
-app.delete('/api/expenses/:id', async (req, res) => {
+app.delete('/api/expenses/:id', auth.requirePermission('canViewReports'), async (req, res) => {
   try {
     const expenseId = req.params.id;
 
@@ -424,7 +509,7 @@ app.delete('/api/expenses/:id', async (req, res) => {
 });
 
 // 8. Profits calculation API
-app.get('/api/profits', async (req, res) => {
+app.get('/api/profits', auth.requirePermission('canViewReports'), async (req, res) => {
   try {
     const data = await readData();
 
@@ -449,10 +534,94 @@ app.get('/api/profits', async (req, res) => {
   }
 });
 
+// 4.5 Receipt for one transaction — the office's proof the operation happened
+app.post('/api/customers/:id/transactions/:txId/receipt', async (req, res) => {
+  try {
+    // The full ledger: the balance shown on the receipt is derived by walking it
+    // from the beginning, so a truncated page would print a wrong number.
+    const customer = await store.getCustomer(req.params.id, { limit: 100000 });
+    const transaction = (customer.transactions || []).find(t => t.id === req.params.txId);
+
+    if (!transaction) return res.status(404).json({ error: 'العملية غير موجودة' });
+
+    // The balance as it stood right after this operation, not today's balance:
+    // a receipt that changes every time it is reprinted proves nothing.
+    const chronological = [...customer.transactions].sort(
+      (a, b) => new Date(a.date) - new Date(b.date)
+    );
+
+    let running = 0;
+    let balanceAfter = 0;
+    for (const tx of chronological) {
+      running += Number.isFinite(tx.balanceDelta)
+        ? tx.balanceDelta
+        : store.computeDelta(tx.type, tx.amount, tx.commission);
+      if (tx.id === transaction.id) {
+        balanceAfter = running;
+        break;
+      }
+    }
+
+    const settings = await store.getSettings();
+    const { generateReceiptBase64 } = require('./utils/pdfHelper');
+
+    const pdfBase64 = await generateReceiptBase64({
+      officeName: settings.officeName || 'حساب الصراف الذكي',
+      customerName: customer.name,
+      transaction,
+      balanceAfter,
+      issuedBy: req.auth?.name || ''
+    });
+
+    // Optionally deliver it straight to the customer.
+    if (req.body?.send && customer.phone) {
+      const { sendDocument, getWhatsAppStatus } = require('./whatsapp');
+
+      if (getWhatsAppStatus().status !== 'connected') {
+        return res.status(503).json({ error: 'الواتساب غير متصل، تم توليد الوصل لكن تعذّر إرساله', pdfBase64 });
+      }
+
+      await sendDocument(
+        customer.phone,
+        Buffer.from(pdfBase64, 'base64'),
+        `وصل_${customer.name.replace(/\s+/g, '_')}_${transaction.id.slice(0, 6)}.pdf`,
+        'application/pdf',
+        `مرحباً ${customer.name}،
+مرفق وصل العملية. يُرجى الاحتفاظ به.`
+      );
+
+      return res.json({ pdfBase64, sent: true });
+    }
+
+    res.json({ pdfBase64, sent: false });
+  } catch (error) {
+    sendStoreError(res, error, 'فشل توليد الوصل');
+  }
+});
+
+// 4.6 Search every customer's ledger at once
+app.get('/api/transactions/search', async (req, res) => {
+  try {
+    const { q, from, to, type, minAmount, maxAmount, customerId, limit } = req.query;
+    res.json(await store.searchTransactions({
+      q,
+      from: from || null,
+      to: to || null,
+      type: type || null,
+      minAmount: minAmount || null,
+      maxAmount: maxAmount || null,
+      customerId: customerId || null,
+      limit: Math.min(Number(limit) || 200, 1000)
+    }));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل البحث في العمليات');
+  }
+});
+
 // --- CASH BOX ---
 
 // 8.1 What should be in the drawer right now (or within a period)
-app.get('/api/cashbox', async (req, res) => {
+app.get('/api/cashbox', auth.requirePermission('canViewReports'), async (req, res) => {
   try {
     const { from, to } = req.query;
     res.json(await store.getCashBox({ from: from || null, to: to || null }));
@@ -462,7 +631,7 @@ app.get('/api/cashbox', async (req, res) => {
 });
 
 // 8.2 Record a physical count and its difference against the expected amount
-app.post('/api/cashbox/count', async (req, res) => {
+app.post('/api/cashbox/count', auth.requirePermission('canViewReports'), async (req, res) => {
   try {
     const record = await store.addCashCount(req.body, req.auth?.role || 'admin');
     res.status(201).json(record);
@@ -472,7 +641,7 @@ app.post('/api/cashbox/count', async (req, res) => {
 });
 
 // 8.3 Previous counts
-app.get('/api/cashbox/counts', async (req, res) => {
+app.get('/api/cashbox/counts', auth.requirePermission('canViewReports'), async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 30, 200);
     res.json(await store.listCashCounts({ limit }));
@@ -483,7 +652,7 @@ app.get('/api/cashbox/counts', async (req, res) => {
 
 // --- SETTINGS ---
 
-app.get('/api/settings', async (req, res) => {
+app.get('/api/settings', auth.requirePermission('canViewReports'), async (req, res) => {
   try {
     res.json(await store.getSettings());
   } catch (error) {
@@ -491,7 +660,7 @@ app.get('/api/settings', async (req, res) => {
   }
 });
 
-app.patch('/api/settings', async (req, res) => {
+app.patch('/api/settings', auth.requirePermission('canManageSettings'), async (req, res) => {
   try {
     res.json(await store.updateSettings(req.body));
   } catch (error) {
@@ -502,7 +671,7 @@ app.patch('/api/settings', async (req, res) => {
 // --- REPORTS ---
 
 // 8.4 Totals, daily trend and per-customer rows for a date range
-app.get('/api/reports', async (req, res) => {
+app.get('/api/reports', auth.requirePermission('canViewReports'), async (req, res) => {
   try {
     const { preset, from, to } = req.query;
     res.json(await reports.buildReport({ preset, from, to }));
@@ -514,7 +683,7 @@ app.get('/api/reports', async (req, res) => {
 // --- BACKUP ---
 
 // 10.1 Download a full snapshot on demand
-app.get('/api/backup/export', async (req, res) => {
+app.get('/api/backup/export', auth.requirePermission('canManageBackup'), async (req, res) => {
   try {
     const snapshot = await store.exportEverything();
     const stamp = new Date().toISOString().slice(0, 10);
@@ -528,7 +697,7 @@ app.get('/api/backup/export', async (req, res) => {
 });
 
 // 10.2 Trigger the WhatsApp backup now, and report when it last ran
-app.post('/api/backup/run', async (req, res) => {
+app.post('/api/backup/run', auth.requirePermission('canManageBackup'), async (req, res) => {
   try {
     const result = await backup.runBackup();
     res.status(result.ok ? 200 : 503).json(result);
@@ -537,19 +706,19 @@ app.post('/api/backup/run', async (req, res) => {
   }
 });
 
-app.get('/api/backup/status', (req, res) => {
+app.get('/api/backup/status', auth.requirePermission('canManageBackup'), (req, res) => {
   res.json({ lastRun: backup.getLastRun(), schedule: process.env.BACKUP_CRON || '0 2 * * *' });
 });
 
 // --- WHATSAPP BOT ROUTES ---
 
 // 9. Get WhatsApp connection status and QR code
-app.get('/api/whatsapp/status', (req, res) => {
+app.get('/api/whatsapp/status', auth.requirePermission('canManageSettings'), (req, res) => {
   res.json(getWhatsAppStatus());
 });
 
 // Diagnostics endpoint to debug connection issues
-app.get('/api/whatsapp/diagnostics', async (req, res) => {
+app.get('/api/whatsapp/diagnostics', auth.requirePermission('canManageSettings'), async (req, res) => {
   const diag = {
     firebaseConfigured: !!db,
     firestoreTest: null,
@@ -583,7 +752,7 @@ app.get('/api/whatsapp/diagnostics', async (req, res) => {
 });
 
 // Request pairing code via phone number
-app.post('/api/whatsapp/pair-phone', async (req, res) => {
+app.post('/api/whatsapp/pair-phone', auth.requirePermission('canManageSettings'), async (req, res) => {
   try {
     const { phoneNumber } = req.body;
     if (!phoneNumber) {
@@ -596,8 +765,19 @@ app.post('/api/whatsapp/pair-phone', async (req, res) => {
   }
 });
 
+// 9.1 Manual retry after the automatic backoff has given up
+app.post('/api/whatsapp/retry', auth.requirePermission('canManageSettings'), async (req, res) => {
+  try {
+    const { retryConnection } = require('./whatsapp');
+    await retryConnection();
+    res.json({ success: true, message: 'تمت إعادة محاولة الاتصال' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 10. Disconnect/Logout WhatsApp
-app.post('/api/whatsapp/logout', async (req, res) => {
+app.post('/api/whatsapp/logout', auth.requirePermission('canManageSettings'), async (req, res) => {
   try {
     await logoutWhatsApp();
     res.json({ message: 'Logged out successfully' });
@@ -653,19 +833,31 @@ app.post('/api/pdf/generate', async (req, res) => {
 // 13. Login (step 1: password)
 app.post('/api/auth/login', loginLimiter, async (req, res) => {
   try {
-    const { password } = req.body;
+    const { username, password } = req.body;
 
-    const passwordOk = await auth.verifyPassword(password);
-    if (!passwordOk) {
-      return res.status(401).json({ error: 'كلمة المرور خاطئة!' });
+    // No username means an older client: treat it as the owner account.
+    const user = await users.verifyCredentials(
+      username || 'owner',
+      password,
+      auth.verifyPassword
+    );
+
+    if (!user) {
+      return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور خاطئة!' });
     }
 
-    // Two-factor is considered OFF only when no owner phone was ever configured.
-    if (!auth.OWNER_PHONE_NUMBER) {
+    // Two-factor protects the owner account, which is the one that can move money
+    // around and manage everyone else. Staff sign in with a password alone.
+    const needsOtp = user.role === 'admin' && !!auth.OWNER_PHONE_NUMBER;
+
+    if (!needsOtp) {
       return res.json({
         success: true,
-        token: auth.issueToken(),
-        warning: 'التحقق بخطوتين غير مفعّل — لم يتم ضبط رقم المالك. يُنصح بتفعيله.'
+        token: auth.issueToken(user),
+        user: users.publicUser(user),
+        warning: user.role === 'admin' && !auth.OWNER_PHONE_NUMBER
+          ? 'التحقق بخطوتين غير مفعّل — لم يتم ضبط رقم المالك. يُنصح بتفعيله.'
+          : undefined
       });
     }
 
@@ -678,7 +870,8 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
       if (auth.ALLOW_LOGIN_WITHOUT_OTP) {
         return res.json({
           success: true,
-          token: auth.issueToken(),
+          token: auth.issueToken(user),
+          user: users.publicUser(user),
           warning: 'تم الدخول بدون رمز تحقق (وضع الطوارئ مفعّل). أوقفه فور عودة الواتساب.'
         });
       }
@@ -702,6 +895,10 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
       });
     }
 
+    // The pending session remembers which account is signing in, so the code
+    // cannot be used to log in as somebody else.
+    pendingOtpUsers.set(otpSessionId, user.id);
+
     return res.json({
       requiresOTP: true,
       otpSessionId,
@@ -714,7 +911,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
 });
 
 // 14. Login (step 2: OTP)
-app.post('/api/auth/verify-otp', loginLimiter, (req, res) => {
+app.post('/api/auth/verify-otp', loginLimiter, async (req, res) => {
   const { otp, otpSessionId } = req.body;
 
   const result = auth.verifyOtpSession(otpSessionId, typeof otp === 'string' ? otp.trim() : otp);
@@ -722,12 +919,72 @@ app.post('/api/auth/verify-otp', loginLimiter, (req, res) => {
     return res.status(401).json({ error: result.error });
   }
 
-  res.json({ success: true, token: auth.issueToken() });
+  const userId = pendingOtpUsers.get(otpSessionId);
+  pendingOtpUsers.delete(otpSessionId);
+
+  const user = userId ? await users.findById(userId) : null;
+  if (!user) {
+    return res.status(401).json({ error: 'انتهت جلسة التحقق، يرجى إعادة تسجيل الدخول.' });
+  }
+
+  res.json({
+    success: true,
+    token: auth.issueToken(user),
+    user: users.publicUser(user)
+  });
 });
 
 // 15. Session check — lets the frontend drop a stale token on startup
 app.get('/api/auth/me', auth.requireAuth, (req, res) => {
-  res.json({ ok: true, role: req.auth.role, expiresAt: req.auth.exp * 1000 });
+  res.json({
+    ok: true,
+    user: {
+      id: req.auth.sub,
+      username: req.auth.username,
+      name: req.auth.name,
+      role: req.auth.role,
+      permissions: users.permissionsFor(req.auth.role)
+    },
+    expiresAt: req.auth.exp * 1000
+  });
+});
+
+// --- USER MANAGEMENT (admin only) ---
+
+app.get('/api/users', auth.requirePermission('canManageUsers'), async (req, res) => {
+  try {
+    const list = await users.listUsers();
+    res.json([users.publicUser(users.envOwner()), ...list.map(users.publicUser)]);
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تحميل المستخدمين');
+  }
+});
+
+app.post('/api/users', auth.requirePermission('canManageUsers'), async (req, res) => {
+  try {
+    res.status(201).json(await users.createUser(req.body));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل إضافة المستخدم');
+  }
+});
+
+app.patch('/api/users/:id', auth.requirePermission('canManageUsers'), async (req, res) => {
+  try {
+    res.json(await users.updateUser(req.params.id, req.body));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تعديل المستخدم');
+  }
+});
+
+app.delete('/api/users/:id', auth.requirePermission('canManageUsers'), async (req, res) => {
+  try {
+    if (req.params.id === req.auth.sub) {
+      return res.status(400).json({ error: 'لا يمكنك حذف حسابك الحالي' });
+    }
+    res.json(await users.deleteUser(req.params.id));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل حذف المستخدم');
+  }
 });
 
 // Set static folder for React frontend

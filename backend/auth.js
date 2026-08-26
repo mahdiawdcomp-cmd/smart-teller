@@ -160,8 +160,18 @@ function verifyOtpSession(otpSessionId, code) {
 
 // ─── JWT ───
 
-function issueToken() {
-  return jwt.sign({ role: 'admin' }, JWT_SECRET, { expiresIn: TOKEN_TTL_SECONDS });
+/** Issues a token carrying who the user is, so the audit trail can name them. */
+function issueToken(user) {
+  return jwt.sign(
+    {
+      sub: user.id,
+      username: user.username,
+      name: user.name,
+      role: user.role
+    },
+    JWT_SECRET,
+    { expiresIn: TOKEN_TTL_SECONDS }
+  );
 }
 
 /** Express middleware — rejects any request without a valid admin token. */
@@ -175,7 +185,7 @@ function requireAuth(req, res, next) {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    if (payload.role !== 'admin') {
+    if (!payload.role) {
       return res.status(403).json({ error: 'صلاحية غير كافية', code: 'FORBIDDEN' });
     }
     req.auth = payload;
@@ -189,8 +199,37 @@ function requireAuth(req, res, next) {
   }
 }
 
+/**
+ * Guards a route behind a named permission.
+ * Roles are resolved server-side from the token, never from the request body.
+ */
+function requirePermission(permission) {
+  return (req, res, next) => {
+    const users = require('./users');
+    const allowed = users.permissionsFor(req.auth?.role)[permission];
+
+    if (!allowed) {
+      return res.status(403).json({
+        error: 'هذه العملية تتطلب صلاحية المدير',
+        code: 'FORBIDDEN'
+      });
+    }
+
+    return next();
+  };
+}
+
+/** A short label for the audit trail: "أحمد (ahmed)". */
+function actorLabel(req) {
+  const auth = req.auth;
+  if (!auth) return 'system';
+  return auth.name ? `${auth.name} (${auth.username})` : (auth.username || auth.sub || 'unknown');
+}
+
 module.exports = {
   assertConfigured,
+  requirePermission,
+  actorLabel,
   verifyPassword,
   createOtpSession,
   verifyOtpSession,

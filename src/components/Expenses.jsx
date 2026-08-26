@@ -24,6 +24,9 @@ export default function Expenses() {
   const [amount, setAmount] = useState('');
   const [notes, setNotes] = useState('');
   const [message, setMessage] = useState('');
+  // Backdating: the office records yesterday's rent today, and the reports
+  // should show it on the day it happened.
+  const [expenseDate, setExpenseDate] = useState('');
 
   const loadData = async () => {
     try {
@@ -56,10 +59,11 @@ export default function Expenses() {
     setLoading(true);
     setMessage('');
     try {
-      await api.addExpense(title, rawAmount, notes);
+      await api.addExpense(title, rawAmount, notes, expenseDate || undefined);
       setTitle('');
       setAmount('');
       setNotes('');
+      setExpenseDate('');
       setMessage('تم تسجيل المصروف بنجاح!');
       loadData();
       setTimeout(() => setMessage(''), 3000);
@@ -164,6 +168,18 @@ export default function Expenses() {
                 value={amount}
                 onChange={e => setAmount(formatNumberWithCommas(e.target.value))}
                 required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>تاريخ المصروف (اتركه فارغاً لتاريخ اليوم)</label>
+              <input
+                type="date"
+                className="form-input"
+                value={expenseDate}
+                onChange={e => setExpenseDate(e.target.value)}
+                max={new Date().toISOString().slice(0, 10)}
+                style={{ direction: 'ltr', textAlign: 'left' }}
               />
             </div>
 

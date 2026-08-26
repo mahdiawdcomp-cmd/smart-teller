@@ -26,6 +26,19 @@ const MIGRATION_BATCH = 400; // Firestore allows 500 writes per batch
 const AUDIT_LOG_LOCAL_MAX = 1000;
 
 // ─── Money helpers ───
+//
+// Money is held as whole dinars. The Iraqi dinar has no fractional unit in
+// circulation, and floating point cannot represent 0.1 exactly — a few hundred
+// fractional operations and a balance drifts away from the sum of its own
+// ledger. Keeping every stored amount integral makes the arithmetic exact.
+
+/** Rounds a money value to whole dinars. */
+function roundMoney(value) {
+  return Math.round(Number(value) || 0);
+}
+
+/** Legacy rows may hold fractions; below this a difference is float noise, not money. */
+const MONEY_EPSILON = 0.005;
 
 /**
  * Signed effect of a transaction on the customer's balance.
@@ -45,19 +58,29 @@ function normalizeTransactionInput(input) {
     throw badRequest('نوع العملية غير صحيح');
   }
 
-  const amount = Number(input.amount);
-  if (!Number.isFinite(amount) || amount <= 0) {
+  const rawAmount = Number(input.amount);
+  if (!Number.isFinite(rawAmount) || rawAmount <= 0) {
     throw badRequest('المبلغ يجب أن يكون رقماً أكبر من صفر');
+  }
+
+  const amount = roundMoney(rawAmount);
+  if (amount <= 0) {
+    throw badRequest('المبلغ يجب أن يكون ديناراً واحداً على الأقل');
   }
 
   const rawCommission = Number(input.commission);
   const commission = type === 'deposit'
     ? 0
-    : (Number.isFinite(rawCommission) && rawCommission >= 0 ? rawCommission : 0);
+    : (Number.isFinite(rawCommission) && rawCommission > 0 ? roundMoney(rawCommission) : 0);
 
   const date = input.date ? new Date(input.date) : new Date();
   if (Number.isNaN(date.getTime())) {
     throw badRequest('تاريخ العملية غير صحيح');
+  }
+  // A future-dated operation would sit in reports for a day that has not
+  // happened yet. The frontend blocks it too, but the client is not the guard.
+  if (date.getTime() > Date.now() + 60_000) {
+    throw badRequest('لا يمكن تسجيل عملية بتاريخ مستقبلي');
   }
 
   return {
@@ -585,7 +608,7 @@ async function recomputeBalance(customerId, actor) {
         : computeDelta(tx.type, tx.amount, tx.commission);
     });
 
-    if (computed !== stored) {
+    if (Math.abs(computed - stored) >= MONEY_EPSILON) {
       await docRef.update({ balance: computed, txCount: txSnap.size });
     }
   } else {
@@ -602,7 +625,7 @@ async function recomputeBalance(customerId, actor) {
           : computeDelta(tx.type, tx.amount, tx.commission);
       }
 
-      if (sum !== storedBalance) {
+      if (Math.abs(sum - storedBalance) >= MONEY_EPSILON) {
         customer.balance = sum;
         customer.txCount = (customer.transactions || []).length;
         await writeLocal(data);
@@ -616,7 +639,8 @@ async function recomputeBalance(customerId, actor) {
     customerName = outcome.name;
   }
 
-  const drift = computed - stored;
+  // Rounded so a legacy fractional row cannot report drift forever.
+  const drift = Math.abs(computed - stored) < MONEY_EPSILON ? 0 : computed - stored;
 
   if (drift !== 0) {
     await appendAuditLog(buildAuditEntry({
@@ -662,6 +686,219 @@ async function sumAllCommissions() {
     }
   }
   return total;
+}
+
+// ─── Duplicate detection & customer management ───
+
+/** Last 10 digits, so 07xx and +9647xx compare equal. */
+function phoneKey(raw) {
+  let digits = String(raw || '').replace(/\D/g, '');
+  if (digits.startsWith('00964')) digits = digits.slice(5);
+  else if (digits.startsWith('964')) digits = digits.slice(3);
+  if (digits.startsWith('0')) digits = digits.slice(1);
+  return digits.length >= 9 ? digits.slice(-10) : '';
+}
+
+/** Arabic names vary in spelling; compare on a stripped form. */
+function nameKey(raw) {
+  return String(raw || '')
+    .trim()
+    .replace(/[ـً-ْ]/g, '')   // tatweel and diacritics
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/ة/g, 'ه')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+/**
+ * Customers that look like the one being added.
+ *
+ * A duplicate customer is worse than a missing one: the same person's money
+ * ends up split across two accounts and neither balance is true.
+ */
+async function findPossibleDuplicates({ name, phone, excludeId = null }) {
+  const customers = await listCustomers();
+  const targetPhone = phoneKey(phone);
+  const targetName = nameKey(name);
+
+  return customers.filter(c => {
+    if (excludeId && c.id === excludeId) return false;
+    if (c.archived) return false;
+
+    const samePhone = targetPhone && phoneKey(c.phone) === targetPhone;
+    const sameName = targetName && nameKey(c.name) === targetName;
+    return samePhone || sameName;
+  });
+}
+
+/** Edits a customer's details. Balance and ledger are untouched. */
+async function updateCustomer(customerId, patch) {
+  const update = {};
+
+  if (patch.name !== undefined) {
+    const name = String(patch.name).trim();
+    if (!name) throw badRequest('اسم الزبون مطلوب');
+    update.name = name;
+  }
+  if (patch.phone !== undefined) update.phone = String(patch.phone).trim();
+  if (patch.archived !== undefined) update.archived = !!patch.archived;
+  if (patch.notes !== undefined) update.notes = String(patch.notes).slice(0, 500);
+
+  if (Object.keys(update).length === 0) throw badRequest('لا توجد تغييرات');
+
+  if (db) {
+    const docRef = db.collection('customers').doc(customerId);
+    const doc = await docRef.get();
+    if (!doc.exists) throw notFound('الزبون غير موجود');
+
+    await docRef.update(update);
+    return { id: customerId, ...doc.data(), ...update };
+  }
+
+  return mutateLocal(data => {
+    const customer = data.customers.find(c => c.id === customerId);
+    if (!customer) throw notFound('الزبون غير موجود');
+    Object.assign(customer, update);
+    return { ...customer };
+  });
+}
+
+/**
+ * Merges one customer into another: every transaction moves across, the
+ * balances add up, and the source is archived rather than deleted so the
+ * history of the merge survives.
+ */
+async function mergeCustomers(sourceId, targetId, actor) {
+  if (sourceId === targetId) throw badRequest('لا يمكن دمج الزبون مع نفسه');
+
+  const [source, target] = await Promise.all([
+    getCustomer(sourceId, { limit: 100000 }),
+    getCustomer(targetId, { limit: 100000 })
+  ]);
+
+  const moved = source.transactions.length;
+
+  if (db) {
+    const sourceRef = db.collection('customers').doc(sourceId);
+    const targetRef = db.collection('customers').doc(targetId);
+
+    // Copy in batches, then flip the source off. Transactions keep their ids,
+    // so a retry after a failure overwrites instead of duplicating.
+    for (let i = 0; i < source.transactions.length; i += MIGRATION_BATCH) {
+      const batch = db.batch();
+      for (const tx of source.transactions.slice(i, i + MIGRATION_BATCH)) {
+        batch.set(targetRef.collection('transactions').doc(tx.id), {
+          ...tx,
+          mergedFrom: sourceId
+        });
+      }
+      await batch.commit();
+    }
+
+    for (let i = 0; i < source.transactions.length; i += MIGRATION_BATCH) {
+      const batch = db.batch();
+      for (const tx of source.transactions.slice(i, i + MIGRATION_BATCH)) {
+        batch.delete(sourceRef.collection('transactions').doc(tx.id));
+      }
+      await batch.commit();
+    }
+
+    await targetRef.update({
+      balance: (Number(target.balance) || 0) + (Number(source.balance) || 0),
+      txCount: (Number(target.txCount) || 0) + moved
+    });
+
+    await sourceRef.update({
+      balance: 0,
+      txCount: 0,
+      archived: true,
+      mergedInto: targetId,
+      mergedAt: new Date().toISOString()
+    });
+  } else {
+    await mutateLocal(data => {
+      const src = data.customers.find(c => c.id === sourceId);
+      const tgt = data.customers.find(c => c.id === targetId);
+      if (!src || !tgt) throw notFound('الزبون غير موجود');
+
+      const moving = (src.transactions || []).map(tx => ({ ...tx, mergedFrom: sourceId }));
+      tgt.transactions = [...moving, ...(tgt.transactions || [])]
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
+      tgt.balance = (Number(tgt.balance) || 0) + (Number(src.balance) || 0);
+      tgt.txCount = tgt.transactions.length;
+
+      src.transactions = [];
+      src.balance = 0;
+      src.txCount = 0;
+      src.archived = true;
+      src.mergedInto = targetId;
+      src.mergedAt = new Date().toISOString();
+    });
+  }
+
+  await appendAuditLog(buildAuditEntry({
+    action: 'merge',
+    customerId: targetId,
+    customerName: target.name,
+    before: { customer: source.name, balance: source.balance, transactions: moved },
+    after: { customer: target.name, balance: (Number(target.balance) || 0) + (Number(source.balance) || 0) },
+    actor
+  }));
+
+  return { movedTransactions: moved, targetId, sourceId };
+}
+
+// ─── Idempotency ───
+//
+// A teller on a weak connection presses save, sees nothing happen, and presses
+// again. Without this, that records the transaction twice and the customer's
+// balance is wrong in a way nobody notices until they complain.
+
+const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Returns the stored result for a key, or null when it is a fresh request. */
+async function getIdempotentResult(key) {
+  if (!key) return null;
+
+  const cutoff = Date.now() - IDEMPOTENCY_TTL_MS;
+
+  if (db) {
+    const doc = await db.collection('idempotency').doc(key).get();
+    if (!doc.exists) return null;
+
+    const record = doc.data();
+    if (new Date(record.at).getTime() < cutoff) return null;
+    return record.result;
+  }
+
+  const data = await readLocal();
+  const record = (data.idempotency || {})[key];
+  if (!record) return null;
+  if (new Date(record.at).getTime() < cutoff) return null;
+  return record.result;
+}
+
+async function saveIdempotentResult(key, result) {
+  if (!key) return;
+
+  const record = { at: new Date().toISOString(), result };
+
+  if (db) {
+    await db.collection('idempotency').doc(key).set(record);
+    return;
+  }
+
+  await mutateLocal(data => {
+    if (!data.idempotency) data.idempotency = {};
+    data.idempotency[key] = record;
+
+    // Trim expired keys so the local file does not grow without bound.
+    const cutoff = Date.now() - IDEMPOTENCY_TTL_MS;
+    for (const [existingKey, existing] of Object.entries(data.idempotency)) {
+      if (new Date(existing.at).getTime() < cutoff) delete data.idempotency[existingKey];
+    }
+  });
 }
 
 // ─── Reporting: scanning the ledger across customers ───
@@ -731,6 +968,67 @@ async function listExpenses({ from = null, to = null } = {}) {
   });
 }
 
+/**
+ * Searches every customer's ledger at once.
+ *
+ * When a customer walks in saying "I transferred five million two months ago",
+ * opening accounts one by one is not an answer.
+ */
+async function searchTransactions({
+  q = '',
+  from = null,
+  to = null,
+  type = null,
+  minAmount = null,
+  maxAmount = null,
+  customerId = null,
+  limit = 200
+} = {}) {
+  const all = await listAllTransactions({ from, to });
+
+  const term = String(q || '').trim().toLowerCase();
+  const normalizedTerm = nameKey(term);
+  const min = Number.isFinite(Number(minAmount)) && minAmount !== null && minAmount !== ''
+    ? Number(minAmount) : null;
+  const max = Number.isFinite(Number(maxAmount)) && maxAmount !== null && maxAmount !== ''
+    ? Number(maxAmount) : null;
+
+  const matches = all.filter(tx => {
+    if (customerId && tx.customerId !== customerId) return false;
+    if (type && tx.type !== type) return false;
+
+    const total = (Number(tx.amount) || 0) +
+      (tx.type === 'withdrawal' ? (Number(tx.commission) || 0) : 0);
+
+    if (min !== null && total < min) return false;
+    if (max !== null && total > max) return false;
+
+    if (term) {
+      const haystack = [
+        tx.customerName,
+        tx.notes,
+        String(tx.amount),
+        String(total)
+      ].join(' ').toLowerCase();
+
+      if (!haystack.includes(term) && !nameKey(haystack).includes(normalizedTerm)) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  // Newest first: recent operations are what people ask about.
+  matches.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  return {
+    total: matches.length,
+    truncated: matches.length > limit,
+    results: matches.slice(0, limit)
+  };
+}
+
 // ─── Settings (opening cash, and anything else the office configures) ───
 
 const DEFAULT_SETTINGS = { openingCash: 0 };
@@ -750,7 +1048,7 @@ async function updateSettings(patch) {
   if (patch.openingCash !== undefined) {
     const value = Number(patch.openingCash);
     if (!Number.isFinite(value)) throw badRequest('رأس المال الافتتاحي يجب أن يكون رقماً');
-    clean.openingCash = value;
+    clean.openingCash = roundMoney(value);
   }
 
   if (Object.keys(clean).length === 0) throw badRequest('لا توجد إعدادات صالحة للحفظ');
@@ -821,10 +1119,11 @@ async function getCashBox({ from = null, to = null } = {}) {
 
 /** Records a physical count of the drawer and the difference against expectations. */
 async function addCashCount({ countedAmount, notes }, actor) {
-  const counted = Number(countedAmount);
-  if (!Number.isFinite(counted) || counted < 0) {
+  const rawCounted = Number(countedAmount);
+  if (!Number.isFinite(rawCounted) || rawCounted < 0) {
     throw badRequest('المبلغ المعدود يجب أن يكون رقماً صحيحاً');
   }
+  const counted = roundMoney(rawCounted);
 
   const box = await getCashBox();
   const record = {
@@ -902,6 +1201,7 @@ async function exportEverything() {
 
 module.exports = {
   computeDelta,
+  roundMoney,
   normalizeTransactionInput,
   listCustomers,
   getCustomer,
@@ -917,6 +1217,14 @@ module.exports = {
   migrateAllCustomers,
   listAllTransactions,
   listExpenses,
+  searchTransactions,
+  findPossibleDuplicates,
+  updateCustomer,
+  mergeCustomers,
+  getIdempotentResult,
+  saveIdempotentResult,
+  phoneKey,
+  nameKey,
   getSettings,
   updateSettings,
   getCashBox,

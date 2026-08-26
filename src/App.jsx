@@ -8,12 +8,16 @@ import WhatsAppSetup from './components/WhatsAppSetup';
 import CashBox from './components/CashBox';
 import Reports from './components/Reports';
 import BackupPanel from './components/BackupPanel';
+import UsersPanel from './components/UsersPanel';
+import TransactionSearch from './components/TransactionSearch';
 import SharedStatementView from './components/SharedStatementView';
 import { Landmark, Users, ArrowUpRight, ArrowDownRight, LogOut, Key, Phone, ShieldCheck } from 'lucide-react';
 
 export default function App() {
   // Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [username, setUsername] = useState('owner');
   const [password, setPassword] = useState('');
   const [otp, setOtp] = useState('');
   const [otpSent, setOtpSent] = useState(false);
@@ -38,6 +42,17 @@ export default function App() {
   const [newCustName, setNewCustName] = useState('');
   const [newCustPhone, setNewCustPhone] = useState('');
   const [addCustError, setAddCustError] = useState('');
+  // Possible duplicates the server flagged; adding proceeds only once confirmed.
+  const [duplicateWarning, setDuplicateWarning] = useState(null);
+
+  // Editing / merging an existing customer
+  const [editingCustomer, setEditingCustomer] = useState(null);
+  const [editCustForm, setEditCustForm] = useState({ name: '', phone: '' });
+  const [mergeTargetId, setMergeTargetId] = useState('');
+  const [editCustError, setEditCustError] = useState('');
+  const [editCustBusy, setEditCustBusy] = useState(false);
+
+  const permissions = currentUser?.permissions || {};
 
   // Check URL for shared statement token
   const searchParams = new URLSearchParams(window.location.search);
@@ -47,6 +62,7 @@ export default function App() {
   useEffect(() => {
     setUnauthorizedHandler(() => {
       setIsAuthenticated(false);
+      setCurrentUser(null);
       setOtpSent(false);
       setOtpSessionId(null);
       setCustomers([]);
@@ -62,8 +78,9 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        await api.checkSession();
+        const me = await api.checkSession();
         if (cancelled) return;
+        setCurrentUser(me.user);
         setIsAuthenticated(true);
         loadCustomers();
       } catch {
@@ -122,14 +139,15 @@ export default function App() {
 
     setAuthLoading(true);
     try {
-      const res = await api.login(password);
+      const res = await api.login(username, password);
       if (res.requiresOTP) {
         setOtpSessionId(res.otpSessionId);
         setOtpSent(true);
         setAuthWarning(res.message);
       } else {
-        // Logged in directly (two-factor not configured for this install)
+        // Logged in directly (staff account, or two-factor not configured)
         session.set(res.token);
+        setCurrentUser(res.user);
         setIsAuthenticated(true);
         loadCustomers();
         if (res.warning) {
@@ -154,6 +172,7 @@ export default function App() {
       const res = await api.verifyOtp(otp, otpSessionId);
       if (res.success) {
         session.set(res.token);
+        setCurrentUser(res.user);
         setOtpSessionId(null);
         setOtpSent(false);
         setPassword('');
@@ -173,6 +192,7 @@ export default function App() {
     if (!window.confirm('هل أنت متأكد من تسجيل الخروج؟')) return;
     session.clear();
     setIsAuthenticated(false);
+    setCurrentUser(null);
     setOtpSent(false);
     setOtpSessionId(null);
     setPassword('');
@@ -180,8 +200,8 @@ export default function App() {
   };
 
   // Handle Add Customer Submit
-  const handleAddCustomerSubmit = async (e) => {
-    e.preventDefault();
+  const handleAddCustomerSubmit = async (e, force = false) => {
+    if (e) e.preventDefault();
     setAddCustError('');
     if (!newCustName) {
       setAddCustError('اسم الزبون مطلوب');
@@ -189,13 +209,77 @@ export default function App() {
     }
 
     try {
-      await api.addCustomer(newCustName, newCustPhone);
+      await api.addCustomer(newCustName, newCustPhone, force);
       setNewCustName('');
       setNewCustPhone('');
+      setDuplicateWarning(null);
       setShowAddCustomerModal(false);
       loadCustomers(); // Reload list
     } catch (err) {
+      // The server refuses a likely duplicate once; the user confirms or cancels.
+      if (err.code === 'POSSIBLE_DUPLICATE') {
+        setDuplicateWarning(err.duplicates);
+        setAddCustError('');
+        return;
+      }
       setAddCustError(err.message);
+    }
+  };
+
+  const openEditCustomer = (customer) => {
+    setEditingCustomer(customer);
+    setEditCustForm({ name: customer.name, phone: customer.phone || '' });
+    setMergeTargetId('');
+    setEditCustError('');
+  };
+
+  const handleSaveCustomer = async (e) => {
+    e.preventDefault();
+    setEditCustBusy(true);
+    setEditCustError('');
+
+    try {
+      await api.updateCustomer(editingCustomer.id, editCustForm);
+      setEditingCustomer(null);
+      await loadCustomers();
+    } catch (err) {
+      setEditCustError(err.message);
+    } finally {
+      setEditCustBusy(false);
+    }
+  };
+
+  // Merging moves every transaction across and archives the duplicate, so the
+  // confirmation spells out exactly what is about to happen.
+  const handleMergeCustomer = async () => {
+    if (!mergeTargetId) {
+      setEditCustError('اختر الزبون الذي سيتم الدمج معه');
+      return;
+    }
+
+    const target = customers.find(c => c.id === mergeTargetId);
+    const confirmText =
+      `دمج "${editingCustomer.name}" داخل "${target?.name}"؟
+
+` +
+      `ستنتقل كل عمليات "${editingCustomer.name}" إلى "${target?.name}"، ` +
+      `ويُجمع الرصيدان، ويُؤرشف الحساب المكرر.
+
+هذا الإجراء لا يمكن التراجع عنه.`;
+
+    if (!window.confirm(confirmText)) return;
+
+    setEditCustBusy(true);
+    setEditCustError('');
+    try {
+      const res = await api.mergeCustomers(editingCustomer.id, mergeTargetId);
+      setEditingCustomer(null);
+      await loadCustomers();
+      window.alert(`تم الدمج بنجاح. نُقلت ${res.movedTransactions} عملية.`);
+    } catch (err) {
+      setEditCustError(err.message);
+    } finally {
+      setEditCustBusy(false);
     }
   };
 
@@ -254,7 +338,21 @@ export default function App() {
           {!otpSent ? (
             <form onSubmit={handlePasswordSubmit}>
               <div className="form-group" style={{ textAlign: 'right' }}>
-                <label>أدخل رمز الدخول الرئيسي *</label>
+                <label>اسم المستخدم *</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="owner"
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
+                  required
+                  autoComplete="username"
+                  style={{ direction: 'ltr', textAlign: 'left' }}
+                />
+              </div>
+
+              <div className="form-group" style={{ textAlign: 'right' }}>
+                <label>كلمة المرور *</label>
                 <div style={{ position: 'relative' }}>
                   <input
                     type="password"
@@ -323,10 +421,20 @@ export default function App() {
           <h1>حساب الصراف الذكي</h1>
         </div>
         
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        {currentUser && (
+          <span style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
+            {currentUser.name}
+            <span className={`badge ${currentUser.role === 'admin' ? 'badge-deposit' : 'badge-withdrawal'}`} style={{ marginRight: '6px', fontSize: '11px' }}>
+              {currentUser.role === 'admin' ? 'مدير' : 'موظف'}
+            </span>
+          </span>
+        )}
         <button className="btn btn-danger" onClick={handleLogout} style={{ padding: '0.5rem 1.25rem', fontSize: '16px' }}>
           <LogOut size={16} />
           خروج
         </button>
+        </div>
       </header>
 
       {/* Main Container */}
@@ -386,29 +494,43 @@ export default function App() {
               📂 الزبائن والحسابات
             </button>
             <button 
+              className={`tab-btn ${activeTab === 'search' ? 'active' : ''}`}
+              onClick={() => setActiveTab('search')}
+            >
+              🔎 البحث في العمليات
+            </button>
+            {permissions.canViewReports && (
+            <button 
               className={`tab-btn ${activeTab === 'expenses' ? 'active' : ''}`}
               onClick={() => setActiveTab('expenses')}
             >
               💰 المصاريف والأرباح
             </button>
+            )}
+            {permissions.canViewReports && (
             <button 
               className={`tab-btn ${activeTab === 'cashbox' ? 'active' : ''}`}
               onClick={() => setActiveTab('cashbox')}
             >
               🧾 صندوق المكتب
             </button>
+            )}
+            {permissions.canViewReports && (
             <button 
               className={`tab-btn ${activeTab === 'reports' ? 'active' : ''}`}
               onClick={() => setActiveTab('reports')}
             >
               📊 التقارير
             </button>
+            )}
+            {permissions.canManageSettings && (
             <button 
               className={`tab-btn ${activeTab === 'whatsapp' ? 'active' : ''}`}
               onClick={() => setActiveTab('whatsapp')}
             >
               📱 الإعدادات والنسخ الاحتياطي
             </button>
+            )}
           </nav>
         )}
 
@@ -417,6 +539,7 @@ export default function App() {
           /* Detailed Statement View */
           <Statements
             customer={selectedCustomer}
+            permissions={permissions}
             onLedgerChanged={refreshSelectedCustomer}
             onBack={() => {
               setSelectedCustomer(null);
@@ -430,21 +553,28 @@ export default function App() {
               <CustomerList
                 customers={customers}
                 onSelectCustomer={openCustomerStatement}
+                onEditCustomer={openEditCustomer}
+                permissions={permissions}
                 onOpenTransaction={(cust) => setActiveTransactionCustomer(cust)}
                 onOpenAddCustomer={() => setShowAddCustomerModal(true)}
               />
             )}
 
-            {activeTab === 'expenses' && <Expenses />}
+            {activeTab === 'search' && (
+              <TransactionSearch onOpenCustomer={openCustomerStatement} />
+            )}
 
-            {activeTab === 'cashbox' && <CashBox />}
+            {activeTab === 'expenses' && permissions.canViewReports && <Expenses />}
 
-            {activeTab === 'reports' && <Reports />}
+            {activeTab === 'cashbox' && permissions.canViewReports && <CashBox />}
 
-            {activeTab === 'whatsapp' && (
+            {activeTab === 'reports' && permissions.canViewReports && <Reports />}
+
+            {activeTab === 'whatsapp' && permissions.canManageSettings && (
               <>
                 <WhatsAppSetup />
                 <BackupPanel />
+                {permissions.canManageUsers && <UsersPanel />}
               </>
             )}
           </>
@@ -470,6 +600,42 @@ export default function App() {
             {addCustError && (
               <div className="toast toast-error">
                 {addCustError}
+              </div>
+            )}
+
+            {/* A duplicate splits one person's money across two accounts, so the
+                server refuses once and the user decides deliberately. */}
+            {duplicateWarning && (
+              <div className="toast toast-error" style={{ textAlign: 'right' }}>
+                <strong>يوجد زبون مشابه مسجّل مسبقاً:</strong>
+                <ul style={{ margin: '0.5rem 1rem 0.75rem 0', paddingRight: '1rem' }}>
+                  {duplicateWarning.map(d => (
+                    <li key={d.id} style={{ marginBottom: '0.25rem' }}>
+                      {d.name}
+                      {d.phone ? ` — ${d.phone}` : ''}
+                      {` — الرصيد: ${Number(d.balance || 0).toLocaleString('en-US')} د.ع`}
+                    </li>
+                  ))}
+                </ul>
+
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => { setDuplicateWarning(null); setShowAddCustomerModal(false); }}
+                    style={{ flex: 1 }}
+                  >
+                    إلغاء الإضافة
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    onClick={() => handleAddCustomerSubmit(null, true)}
+                    style={{ flex: 1 }}
+                  >
+                    زبون مختلف — أضفه
+                  </button>
+                </div>
               </div>
             )}
 
@@ -514,6 +680,84 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 1.5 Modal for editing / merging a customer */}
+      {editingCustomer && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <div className="panel-header">
+              <h2>تعديل بيانات الزبون</h2>
+            </div>
+
+            {editCustError && <div className="toast toast-error">{editCustError}</div>}
+
+            <form onSubmit={handleSaveCustomer}>
+              <div className="form-group">
+                <label>اسم الزبون *</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={editCustForm.name}
+                  onChange={e => setEditCustForm({ ...editCustForm, name: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>رقم الهاتف</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={editCustForm.phone}
+                  onChange={e => setEditCustForm({ ...editCustForm, phone: e.target.value })}
+                />
+              </div>
+
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setEditingCustomer(null)} disabled={editCustBusy}>
+                  إغلاق
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={editCustBusy}>
+                  {editCustBusy ? 'جاري الحفظ...' : 'حفظ التعديل'}
+                </button>
+              </div>
+            </form>
+
+            <hr style={{ margin: '1.5rem 0', border: 'none', borderTop: '1px solid var(--border-light)' }} />
+
+            <h3 style={{ fontSize: '17px' }}>دمج هذا الزبون مع زبون آخر</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>
+              تُنقل كل العمليات إلى الزبون المختار، ويُجمع الرصيدان، ويُؤرشف هذا الحساب.
+            </p>
+
+            <div className="form-group">
+              <select
+                className="form-input"
+                value={mergeTargetId}
+                onChange={e => setMergeTargetId(e.target.value)}
+              >
+                <option value="">— اختر الزبون الأصلي —</option>
+                {customers
+                  .filter(c => c.id !== editingCustomer.id && !c.archived)
+                  .map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{c.phone ? ` — ${c.phone}` : ''}
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            <button
+              type="button"
+              className="btn btn-danger btn-block"
+              onClick={handleMergeCustomer}
+              disabled={editCustBusy || !mergeTargetId}
+            >
+              {editCustBusy ? 'جاري الدمج...' : 'دمج الحسابين'}
+            </button>
           </div>
         </div>
       )}

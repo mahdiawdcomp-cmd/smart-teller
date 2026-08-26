@@ -286,6 +286,138 @@ async function generatePdfBase64(customerName, transactions, periodText, balance
   }
 }
 
+// ─── Single-transaction receipt ───
+
+/** Shared @font-face block so the receipt renders Arabic like the statement does. */
+function receiptFontCss() {
+  if (!amiriRegularB64 || !amiriBoldB64) return '';
+  return `
+    @font-face {
+      font-family: 'Amiri';
+      src: url(data:font/truetype;base64,${amiriRegularB64}) format('truetype');
+      font-weight: 400;
+    }
+    @font-face {
+      font-family: 'Amiri';
+      src: url(data:font/truetype;base64,${amiriBoldB64}) format('truetype');
+      font-weight: 700;
+    }`;
+}
+
+/**
+ * A slip for one operation.
+ *
+ * This is the office's protection when a customer later denies an operation: it
+ * names the amount, the commission, the resulting balance and the moment it
+ * happened, on one page the customer receives over WhatsApp.
+ */
+function buildReceiptHtml({ officeName, customerName, transaction, balanceAfter, issuedBy }) {
+  const isDeposit = transaction.type === 'deposit';
+  const commission = Number(transaction.commission) || 0;
+  const total = Number(transaction.amount) + (isDeposit ? 0 : commission);
+
+  const typeLabel = isDeposit ? 'إيداع (استلمنا منك)' : 'سحب / حوالة (سلّمنا لك)';
+  const accent = isDeposit ? '#16a34a' : '#dc2626';
+  const balanceLabel = balanceAfter >= 0 ? 'له' : 'عليه';
+
+  const when = new Date(transaction.date).toLocaleString('ar-EG', {
+    year: 'numeric', month: 'long', day: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+
+  const commissionRow = (!isDeposit && commission > 0)
+    ? `<tr><td>العمولة</td><td>${fmt(commission)} د.ع</td></tr>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8">
+<style>
+${receiptFontCss()}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Amiri', 'Traditional Arabic', serif;
+  padding: 14px;
+  color: #1f2937;
+  direction: rtl;
+}
+.card { border: 2px solid ${accent}; border-radius: 10px; overflow: hidden; }
+.head { background: ${accent}; color: #fff; padding: 14px; text-align: center; }
+.head h1 { font-size: 19px; margin-bottom: 3px; }
+.head p { font-size: 12px; opacity: .9; }
+.body { padding: 14px; }
+table { width: 100%; border-collapse: collapse; }
+td { padding: 8px 6px; border-bottom: 1px solid #e5e7eb; font-size: 14px; }
+td:first-child { color: #6b7280; width: 44%; }
+td:last-child { font-weight: 700; }
+.total td { font-size: 17px; color: ${accent}; border-bottom: 2px solid ${accent}; }
+.balance {
+  margin-top: 14px; padding: 12px; border-radius: 8px; text-align: center;
+  background: ${balanceAfter >= 0 ? 'rgba(22,163,74,.08)' : 'rgba(220,38,38,.08)'};
+  border: 1px solid ${balanceAfter >= 0 ? '#16a34a' : '#dc2626'};
+}
+.balance span { display: block; font-size: 12px; color: #6b7280; margin-bottom: 3px; }
+.balance strong { font-size: 20px; color: ${balanceAfter >= 0 ? '#16a34a' : '#dc2626'}; }
+.foot { margin-top: 14px; text-align: center; font-size: 11px; color: #9ca3af; line-height: 1.7; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="head">
+      <h1>${officeName}</h1>
+      <p>وصل عملية مالية</p>
+    </div>
+    <div class="body">
+      <table>
+        <tr><td>الزبون</td><td>${customerName}</td></tr>
+        <tr><td>نوع العملية</td><td>${typeLabel}</td></tr>
+        <tr><td>التاريخ والوقت</td><td>${when}</td></tr>
+        <tr><td>المبلغ</td><td>${fmt(transaction.amount)} د.ع</td></tr>
+        ${commissionRow}
+        <tr class="total"><td>الإجمالي</td><td>${fmt(total)} د.ع</td></tr>
+        ${transaction.notes ? `<tr><td>الملاحظات</td><td>${transaction.notes}</td></tr>` : ''}
+      </table>
+
+      <div class="balance">
+        <span>رصيدك بعد هذه العملية</span>
+        <strong>${fmt(Math.abs(balanceAfter))} د.ع (${balanceLabel})</strong>
+      </div>
+
+      <div class="foot">
+        رقم الوصل: ${transaction.id}<br>
+        ${issuedBy ? `أصدره: ${issuedBy}<br>` : ''}
+        يُرجى الاحتفاظ بهذا الوصل للمراجعة.
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+async function generateReceiptBase64(payload) {
+  const html = buildReceiptHtml(payload);
+
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+
+  try {
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await new Promise(r => setTimeout(r, 400));
+
+    const pdfBuffer = await page.pdf({
+      width: '80mm',           // receipt-printer friendly, still readable on a phone
+      printBackground: true,
+      margin: { top: '6px', right: '6px', bottom: '6px', left: '6px' }
+    });
+
+    return Buffer.from(pdfBuffer).toString('base64');
+  } finally {
+    await page.close();
+  }
+}
+
 module.exports = {
-  generatePdfBase64
+  generatePdfBase64,
+  generateReceiptBase64
 };

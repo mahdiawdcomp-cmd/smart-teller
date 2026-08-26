@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../utils/api';
-import { FileText, Send, Download, Calendar, User, ArrowLeft, Loader, Pencil, Trash2, History, RefreshCw } from 'lucide-react';
+import { FileText, Send, Download, Calendar, User, ArrowLeft, Loader, Pencil, Trash2, History, RefreshCw, Receipt } from 'lucide-react';
 
 /** Renders an audit-log snapshot as a short Arabic line. */
 function describeAuditValue(value) {
@@ -19,7 +19,8 @@ function describeAuditValue(value) {
     (value.notes ? ` — ${value.notes}` : '');
 }
 
-export default function Statements({ customer, onBack, onLedgerChanged }) {
+export default function Statements({ customer, onBack, onLedgerChanged, permissions = {} }) {
+  const canEditLedger = permissions.canEditLedger !== false;
   const [filter, setFilter] = useState('all'); // 'all' | 'month' | 'prev_month' | 'custom'
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -45,37 +46,48 @@ export default function Statements({ customer, onBack, onLedgerChanged }) {
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditLoading, setAuditLoading] = useState(false);
 
+  /**
+   * The selected period as explicit bounds.
+   *
+   * The table and the PDF both read from here. When they each did their own
+   * filtering, any difference between the two made the printed statement
+   * disagree with the screen it was printed from.
+   */
+  const getPeriodBounds = () => {
+    const now = new Date();
+
+    if (filter === 'month') {
+      return { start: new Date(now.getFullYear(), now.getMonth(), 1), end: null };
+    }
+    if (filter === 'prev_month') {
+      return {
+        start: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+        end: new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999)
+      };
+    }
+    if (filter === 'custom') {
+      const start = startDate ? new Date(startDate) : null;
+      if (start) start.setHours(0, 0, 0, 0);
+      const end = endDate ? new Date(endDate) : null;
+      if (end) end.setHours(23, 59, 59, 999);
+      return { start, end };
+    }
+    return { start: null, end: null }; // 'all'
+  };
+
+  const inPeriod = (tx, bounds) => {
+    const d = new Date(tx.date);
+    if (bounds.start && d < bounds.start) return false;
+    if (bounds.end && d > bounds.end) return false;
+    return true;
+  };
+
   // Apply filters
   useEffect(() => {
     if (!customer || !customer.transactions) return;
 
-    let txs = [...customer.transactions];
-    const now = new Date();
-
-    if (filter === 'month') {
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      txs = txs.filter(t => new Date(t.date) >= startOfMonth);
-    } else if (filter === 'prev_month') {
-      const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const endOfPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
-      txs = txs.filter(t => {
-        const d = new Date(t.date);
-        return d >= startOfPrevMonth && d <= endOfPrevMonth;
-      });
-    } else if (filter === 'custom') {
-      if (startDate) {
-        const start = new Date(startDate);
-        start.setHours(0, 0, 0, 0);
-        txs = txs.filter(t => new Date(t.date) >= start);
-      }
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        txs = txs.filter(t => new Date(t.date) <= end);
-      }
-    }
-
-    setFilteredTransactions(txs);
+    const bounds = getPeriodBounds();
+    setFilteredTransactions(customer.transactions.filter(t => inPeriod(t, bounds)));
   }, [customer, filter, startDate, endDate]);
 
   // Format date range text in Arabic
@@ -104,60 +116,39 @@ export default function Statements({ customer, onBack, onLedgerChanged }) {
     downloadLink.click();
   };
 
+  /** Signed effect of a transaction, matching the server's balanceDelta. */
+  const deltaOf = (tx) => Number.isFinite(tx.balanceDelta)
+    ? tx.balanceDelta
+    : (tx.type === 'deposit' ? tx.amount : -(tx.amount + (tx.commission || 0)));
+
   // Helper to construct the chronological PDF payload with running balances
   const getPdfPayload = () => {
     if (!customer || !customer.transactions) return null;
-    
-    // Reverse array to sort oldest to newest (chronological order)
+
+    const bounds = getPeriodBounds();
+
+    // Oldest to newest. The server hands the ledger over newest-first.
     const chronologicalTxs = [...customer.transactions].reverse();
-    
-    let currentBal = 0;
-    const txsWithBal = chronologicalTxs.map(tx => {
-      const change = tx.type === 'deposit' ? tx.amount : -(tx.amount + (tx.commission || 0));
-      currentBal += change;
-      return { ...tx, runningBalance: currentBal };
-    });
-    
-    let filteredWithBal = [...txsWithBal];
-    const now = new Date();
-    if (filter === 'month') {
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      filteredWithBal = filteredWithBal.filter(t => new Date(t.date) >= startOfMonth);
-    } else if (filter === 'prev_month') {
-      const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const endOfPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
-      filteredWithBal = filteredWithBal.filter(t => {
-        const d = new Date(t.date);
-        return d >= startOfPrevMonth && d <= endOfPrevMonth;
+
+    // The opening balance is everything that happened BEFORE the period — derived
+    // by summing it, not by reading today's balance. A period with no activity
+    // used to print today's number, so a quiet July statement showed August money.
+    const openingBalance = chronologicalTxs
+      .filter(tx => bounds.start && new Date(tx.date) < bounds.start)
+      .reduce((sum, tx) => sum + deltaOf(tx), 0);
+
+    let currentBal = openingBalance;
+    const filteredWithBal = chronologicalTxs
+      .filter(tx => inPeriod(tx, bounds))
+      .map(tx => {
+        currentBal += deltaOf(tx);
+        return { ...tx, runningBalance: currentBal };
       });
-    } else if (filter === 'custom') {
-      if (startDate) {
-        const start = new Date(startDate);
-        start.setHours(0, 0, 0, 0);
-        filteredWithBal = filteredWithBal.filter(t => new Date(t.date) >= start);
-      }
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        filteredWithBal = filteredWithBal.filter(t => new Date(t.date) <= end);
-      }
-    }
-    
-    let openingBalance = 0;
-    if (filteredWithBal.length > 0) {
-      const firstFilteredTx = filteredWithBal[0];
-      const firstIdx = txsWithBal.findIndex(t => t.id === firstFilteredTx.id);
-      if (firstIdx > 0) {
-        openingBalance = txsWithBal[firstIdx - 1].runningBalance;
-      }
-    } else {
-      openingBalance = customer.balance;
-    }
-    
-    const finalBalance = filteredWithBal.length > 0 
-      ? filteredWithBal[filteredWithBal.length - 1].runningBalance 
-      : openingBalance;
-      
+
+    // Closing balance = opening + everything inside the period, which stays
+    // correct when the period is empty.
+    const finalBalance = currentBal;
+
     return {
       customerName: customer.name,
       transactions: filteredWithBal,
@@ -357,6 +348,27 @@ export default function Statements({ customer, onBack, onLedgerChanged }) {
       );
       setTimeout(() => setStatusMessage(''), 5000);
       if (onLedgerChanged) await onLedgerChanged();
+    } catch (err) {
+      setStatusMessage(`خطأ: ${err.message}`);
+    } finally {
+      setLedgerBusy(false);
+    }
+  };
+
+  // 6. Receipt for one operation — proof the office can hand the customer.
+  const handleReceipt = async (tx, send) => {
+    setLedgerBusy(true);
+    try {
+      const res = await api.getReceipt(customer.id, tx.id, send);
+
+      if (send && res.sent) {
+        setStatusMessage('تم إرسال الوصل للزبون على الواتساب ✅');
+      } else {
+        triggerDownload(res.pdfBase64, `وصل_${customer.name.replace(/\s+/g, '_')}_${tx.id.slice(0, 6)}.pdf`);
+        setStatusMessage('تم تنزيل الوصل 📥');
+      }
+
+      setTimeout(() => setStatusMessage(''), 4000);
     } catch (err) {
       setStatusMessage(`خطأ: ${err.message}`);
     } finally {
@@ -614,14 +626,18 @@ export default function Statements({ customer, onBack, onLedgerChanged }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
         <h3 style={{ margin: 0 }}>جدول العمليات للفترة المحددة ({getPeriodText()})</h3>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
+          {canEditLedger && (
           <button className="btn btn-secondary" onClick={handleRecompute} disabled={ledgerBusy} style={{ padding: '0.5rem 1rem' }}>
             <RefreshCw size={16} />
             تدقيق الرصيد
           </button>
+          )}
+          {canEditLedger && (
           <button className="btn btn-secondary" onClick={toggleAudit} style={{ padding: '0.5rem 1rem' }}>
             <History size={16} />
             {showAudit ? 'إخفاء سجل التعديلات' : 'سجل التعديلات'}
           </button>
+          )}
         </div>
       </div>
 
@@ -673,22 +689,46 @@ export default function Statements({ customer, onBack, onLedgerChanged }) {
                       <div style={{ display: 'flex', gap: '0.35rem' }}>
                         <button
                           className="btn btn-secondary"
-                          onClick={() => openEdit(tx)}
+                          onClick={() => handleReceipt(tx, false)}
                           disabled={ledgerBusy}
-                          title="تعديل العملية"
+                          title="تنزيل وصل العملية"
                           style={{ padding: '0.4rem 0.6rem' }}
                         >
-                          <Pencil size={16} />
+                          <Receipt size={16} />
                         </button>
-                        <button
-                          className="btn btn-danger"
-                          onClick={() => handleDeleteTx(tx)}
-                          disabled={ledgerBusy}
-                          title="حذف العملية"
-                          style={{ padding: '0.4rem 0.6rem' }}
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                        {customer.phone && (
+                          <button
+                            className="btn btn-success"
+                            onClick={() => handleReceipt(tx, true)}
+                            disabled={ledgerBusy}
+                            title="إرسال الوصل للزبون بالواتساب"
+                            style={{ padding: '0.4rem 0.6rem' }}
+                          >
+                            <Send size={16} />
+                          </button>
+                        )}
+                        {canEditLedger && (
+                          <>
+                            <button
+                              className="btn btn-secondary"
+                              onClick={() => openEdit(tx)}
+                              disabled={ledgerBusy}
+                              title="تعديل العملية"
+                              style={{ padding: '0.4rem 0.6rem' }}
+                            >
+                              <Pencil size={16} />
+                            </button>
+                            <button
+                              className="btn btn-danger"
+                              onClick={() => handleDeleteTx(tx)}
+                              disabled={ledgerBusy}
+                              title="حذف العملية"
+                              style={{ padding: '0.4rem 0.6rem' }}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>

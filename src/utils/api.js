@@ -38,7 +38,10 @@ async function authFetch(path, options = {}) {
     }
   });
 
-  if (res.status === 401 || res.status === 403) {
+  // 401 means the session is gone — drop back to the login screen.
+  // 403 means the session is fine but this account lacks the permission, so the
+  // user stays logged in and simply sees the refusal.
+  if (res.status === 401) {
     session.clear();
     onUnauthorized();
     throw await readError(res, 'انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً');
@@ -73,12 +76,40 @@ export const api = {
     return res.json();
   },
 
-  addCustomer: async (name, phone) => {
-    const res = await authFetch('/customers', {
+  // force=true confirms an add the server flagged as a possible duplicate.
+  addCustomer: async (name, phone, force = false) => {
+    const res = await authFetch(`/customers${force ? '?force=true' : ''}`, {
       method: 'POST',
       body: JSON.stringify({ name, phone })
     });
+
+    if (res.status === 409) {
+      const data = await res.json().catch(() => ({}));
+      const err = new Error(data.error || 'يوجد زبون مشابه');
+      err.code = 'POSSIBLE_DUPLICATE';
+      err.duplicates = data.duplicates || [];
+      throw err;
+    }
+
     if (!res.ok) throw await readError(res, 'فشل إضافة الزبون');
+    return res.json();
+  },
+
+  updateCustomer: async (customerId, patch) => {
+    const res = await authFetch(`/customers/${customerId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch)
+    });
+    if (!res.ok) throw await readError(res, 'فشل تعديل بيانات الزبون');
+    return res.json();
+  },
+
+  mergeCustomers: async (sourceId, targetId) => {
+    const res = await authFetch(`/customers/${sourceId}/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ targetId })
+    });
+    if (!res.ok) throw await readError(res, 'فشل دمج الزبائن');
     return res.json();
   },
 
@@ -89,12 +120,66 @@ export const api = {
     return res.json();
   },
 
-  addTransaction: async (customerId, transactionData) => {
+  // idempotencyKey makes a retry after a dropped connection safe: the server
+  // replays the first result instead of recording the money a second time.
+  addTransaction: async (customerId, transactionData, idempotencyKey) => {
     const res = await authFetch(`/customers/${customerId}/transactions`, {
       method: 'POST',
+      headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {},
       body: JSON.stringify(transactionData)
     });
     if (!res.ok) throw await readError(res, 'فشل إضافة العملية الحسابية');
+    return res.json();
+  },
+
+  getReceipt: async (customerId, txId, send = false) => {
+    const res = await authFetch(`/customers/${customerId}/transactions/${txId}/receipt`, {
+      method: 'POST',
+      body: JSON.stringify({ send })
+    });
+    if (!res.ok) throw await readError(res, 'فشل توليد الوصل');
+    return res.json();
+  },
+
+  searchTransactions: async (filters) => {
+    const params = new URLSearchParams();
+    Object.entries(filters || {}).forEach(([key, value]) => {
+      if (value !== '' && value !== null && value !== undefined) params.set(key, value);
+    });
+
+    const res = await authFetch(`/transactions/search?${params}`);
+    if (!res.ok) throw await readError(res, 'فشل البحث في العمليات');
+    return res.json();
+  },
+
+  // Users
+  getUsers: async () => {
+    const res = await authFetch('/users');
+    if (!res.ok) throw await readError(res, 'فشل تحميل المستخدمين');
+    return res.json();
+  },
+
+  createUser: async (payload) => {
+    const res = await authFetch('/users', { method: 'POST', body: JSON.stringify(payload) });
+    if (!res.ok) throw await readError(res, 'فشل إضافة المستخدم');
+    return res.json();
+  },
+
+  updateUser: async (id, patch) => {
+    const res = await authFetch(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+    if (!res.ok) throw await readError(res, 'فشل تعديل المستخدم');
+    return res.json();
+  },
+
+  deleteUser: async (id) => {
+    const res = await authFetch(`/users/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw await readError(res, 'فشل حذف المستخدم');
+    return res.json();
+  },
+
+  retryWhatsApp: async () => {
+    const res = await authFetch('/whatsapp/retry', { method: 'POST' });
+    if (!res.ok) throw await readError(res, 'فشل إعادة المحاولة');
     return res.json();
   },
 
@@ -157,10 +242,10 @@ export const api = {
     return res.json();
   },
 
-  addExpense: async (title, amount, notes) => {
+  addExpense: async (title, amount, notes, date) => {
     const res = await authFetch('/expenses', {
       method: 'POST',
-      body: JSON.stringify({ title, amount, notes })
+      body: JSON.stringify({ title, amount, notes, date })
     });
     if (!res.ok) throw await readError(res, 'فشل إضافة المصروف');
     return res.json();
@@ -296,10 +381,10 @@ export const api = {
   },
 
   // Auth API
-  login: async (password) => {
+  login: async (username, password) => {
     const res = await publicFetch('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ password })
+      body: JSON.stringify({ username, password })
     });
     if (!res.ok) throw await readError(res, 'فشل تسجيل الدخول');
     return res.json();

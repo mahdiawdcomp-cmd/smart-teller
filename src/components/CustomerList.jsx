@@ -1,11 +1,19 @@
 import React, { useState } from 'react';
-import { UserPlus, Search, FileText, ArrowLeftRight, User } from 'lucide-react';
+import { UserPlus, Search, FileText, ArrowLeftRight, User, Pencil } from 'lucide-react';
 
-export default function CustomerList({ customers, onSelectCustomer, onOpenTransaction, onOpenAddCustomer }) {
+export default function CustomerList({
+  customers,
+  onSelectCustomer,
+  onOpenTransaction,
+  onOpenAddCustomer,
+  onEditCustomer,
+  permissions = {}
+}) {
   const [search, setSearch] = useState('');
 
   // Filter customers by name or phone number
-  const filteredCustomers = customers.filter(c => {
+  // Archived customers (merged away or retired) are hidden from the daily list.
+  const filteredCustomers = customers.filter(c => c.archived !== true).filter(c => {
     const term = search.toLowerCase();
     return (
       c.name.toLowerCase().includes(term) ||
@@ -90,6 +98,19 @@ export default function CustomerList({ customers, onSelectCustomer, onOpenTransa
                           <ArrowLeftRight size={16} />
                           عملية جديدة
                         </button>
+
+                        {/* Edit / merge — admin only: a rename changes every
+                            statement this customer has ever been sent. */}
+                        {permissions.canManageCustomers && onEditCustomer && (
+                          <button
+                            className="btn btn-secondary"
+                            style={{ padding: '0.5rem 0.75rem', fontSize: '16px', borderRadius: '8px' }}
+                            onClick={() => onEditCustomer(c)}
+                            title="تعديل بيانات الزبون"
+                          >
+                            <Pencil size={16} />
+                          </button>
+                        )}
 
                         {/* Statement Button */}
                         <button

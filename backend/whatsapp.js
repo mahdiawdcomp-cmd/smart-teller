@@ -20,6 +20,51 @@ let sock = null;
 let qrCodeData = null; // Stores latest QR code string or image URL
 let connectionState = 'disconnected'; // 'connecting' | 'connected' | 'disconnected' | 'qr_ready'
 
+// ─── Reconnect backoff ───
+//
+// The old code retried every 5 seconds forever. WhatsApp reads a client that
+// hammers it that way as abusive and can ban the number — the exact outcome the
+// office can least afford. Retries now back off and eventually stop asking.
+
+const RECONNECT_DELAYS_MS = [5_000, 15_000, 60_000, 300_000, 900_000]; // 5s -> 15m
+let reconnectAttempt = 0;
+let reconnectTimer = null;
+let lastConnectionError = null;
+
+function scheduleReconnect(reason) {
+  if (reconnectTimer) return; // one pending attempt at a time
+
+  if (reconnectAttempt >= RECONNECT_DELAYS_MS.length) {
+    lastConnectionError =
+      'تعذّر الاتصال بالواتساب بعد عدة محاولات. افتح صفحة الإعدادات واضغط «إعادة المحاولة».';
+    console.error('[WA] Giving up automatic reconnect. Manual retry required.');
+    return;
+  }
+
+  const delay = RECONNECT_DELAYS_MS[reconnectAttempt];
+  reconnectAttempt += 1;
+
+  console.log(`[WA] Reconnect attempt ${reconnectAttempt} in ${delay / 1000}s (${reason}).`);
+
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectToWhatsApp().catch(err => {
+      console.error('[WA] Reconnect failed:', err.message);
+      scheduleReconnect('retry failed');
+    });
+  }, delay);
+}
+
+/** Called from the settings screen to restart the backoff after a manual fix. */
+function resetReconnect() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectAttempt = 0;
+  lastConnectionError = null;
+}
+
 // --- Custom Firebase Auth State for Baileys ---
 async function useFirebaseAuthState(firestoreDb) {
   const credsRef = firestoreDb.collection('whatsapp_auth').doc('creds');
@@ -162,8 +207,7 @@ async function connectToWhatsApp() {
       qrCodeData = null;
 
       if (shouldReconnect) {
-        // Reconnect after delay to avoid loop issues
-        setTimeout(connectToWhatsApp, 5000);
+        scheduleReconnect(lastDisconnect?.error?.message || 'connection closed');
       } else {
         console.log("Logged out from WhatsApp. Please scan QR Code again.");
         // Clear session data if logged out
@@ -184,12 +228,16 @@ async function connectToWhatsApp() {
           await fs.remove(sessionDir).catch(err => console.error(err));
           console.log("Cleared Local WhatsApp session files.");
         }
-        setTimeout(connectToWhatsApp, 3000);
+        // A logout is a deliberate act: start the backoff fresh so the owner can
+        // scan a new QR immediately.
+        resetReconnect();
+        scheduleReconnect('logged out, awaiting new QR');
       }
     } else if (connection === 'open') {
       console.log('WhatsApp Bot connected successfully!');
       connectionState = 'connected';
       qrCodeData = null;
+      resetReconnect();
     }
   });
 }
@@ -312,8 +360,15 @@ setTimeout(() => {
 module.exports = {
   getWhatsAppStatus: () => ({
     status: connectionState,
-    qr: qrCodeData
+    qr: qrCodeData,
+    reconnectAttempt,
+    reconnectExhausted: reconnectAttempt >= RECONNECT_DELAYS_MS.length,
+    lastError: lastConnectionError
   }),
+  retryConnection: () => {
+    resetReconnect();
+    return connectToWhatsApp();
+  },
   sendStatementPDF,
   sendTextMessage,
   sendDocument,

@@ -15,6 +15,13 @@ const parseRawNumber = (val) => {
   return parseFloat(val.toString().replace(/,/g, '')) || 0;
 };
 
+/** Local datetime string for an <input type="datetime-local"> value. */
+function toLocalInputValue(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 export default function TransactionForm({ customer, onClose, onSuccess }) {
   const [type, setType] = useState('deposit'); // 'deposit' | 'withdrawal'
   const [amount, setAmount] = useState('');
@@ -23,6 +30,17 @@ export default function TransactionForm({ customer, onClose, onSuccess }) {
   const [confirmCheckbox, setConfirmCheckbox] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Backdating: the teller records yesterday's operation today, and a wrong date
+  // silently corrupts every daily report built on top of it.
+  const [useCustomDate, setUseCustomDate] = useState(false);
+  const [customDate, setCustomDate] = useState(toLocalInputValue(new Date()));
+
+  // One key per open form. A retry after a dropped connection reuses it, so the
+  // server replays the first result instead of recording the money twice.
+  const [idempotencyKey] = useState(() =>
+    (window.crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+  );
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -41,16 +59,29 @@ export default function TransactionForm({ customer, onClose, onSuccess }) {
       return;
     }
 
+    if (useCustomDate) {
+      const picked = new Date(customDate);
+      if (Number.isNaN(picked.getTime())) {
+        setError('التاريخ المُدخل غير صحيح');
+        return;
+      }
+      if (picked.getTime() > Date.now() + 60_000) {
+        setError('لا يمكن تسجيل عملية بتاريخ مستقبلي');
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       const transactionData = {
         type,
         amount: rawAmount,
         commission: type === 'deposit' ? 0 : rawCommission,
-        notes: notes || ''
+        notes: notes || '',
+        ...(useCustomDate ? { date: new Date(customDate).toISOString() } : {})
       };
 
-      await api.addTransaction(customer.id, transactionData);
+      await api.addTransaction(customer.id, transactionData, idempotencyKey);
       
       // Celebrate success with confetti! Give a premium visual reward.
       confetti({
@@ -210,6 +241,31 @@ export default function TransactionForm({ customer, onClose, onSuccess }) {
               value={notes}
               onChange={e => setNotes(e.target.value)}
             />
+          </div>
+
+          {/* Backdating: the default is now, but an operation from an earlier day
+              can carry its real date so the daily reports stay true. */}
+          <div className="form-group">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={useCustomDate}
+                onChange={e => setUseCustomDate(e.target.checked)}
+                style={{ width: '18px', height: '18px' }}
+              />
+              العملية بتاريخ سابق (وليس الآن)
+            </label>
+
+            {useCustomDate && (
+              <input
+                type="datetime-local"
+                className="form-input"
+                value={customDate}
+                onChange={e => setCustomDate(e.target.value)}
+                max={toLocalInputValue(new Date())}
+                style={{ marginTop: '0.5rem', direction: 'ltr', textAlign: 'left' }}
+              />
+            )}
           </div>
 
           {/* Safety Checkbox for elderly users */}

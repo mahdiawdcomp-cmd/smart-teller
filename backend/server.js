@@ -128,6 +128,7 @@ require('./scheduler');
 // Reporting and the automatic off-server backup
 const reports = require('./reports');
 const backup = require('./backup');
+const debtReminder = require('./debtReminder');
 
 // Path for local database fallback
 const LOCAL_DB_PATH = path.join(__dirname, 'data', 'database.json');
@@ -265,7 +266,7 @@ app.get('/api/customers/:id', async (req, res) => {
 });
 
 // 3. Add new customer
-app.post('/api/customers', async (req, res) => {
+app.post('/api/customers', auth.requirePermission('canRecordTransactions'), async (req, res) => {
   try {
     const { name, phone } = req.body;
     if (!name || !String(name).trim()) {
@@ -311,6 +312,35 @@ app.patch('/api/customers/:id', auth.requirePermission('canManageCustomers'), as
   }
 });
 
+// 3.1b Archive a customer, and restore one.
+//
+// Deliberately not a delete. A customer's ledger is the record of money that
+// actually moved; erasing it would leave the office's own totals unexplainable
+// and destroy the only proof of past dealings. Archiving hides them from the
+// daily list and nothing more — every transaction stays readable, and the
+// account can come back untouched.
+app.post('/api/customers/:id/archive', auth.requirePermission('canManageCustomers'), async (req, res) => {
+  try {
+    const archived = req.body?.archived !== false; // default: archive
+    const customer = await store.updateCustomer(req.params.id, { archived });
+
+    await store.recordCustomerArchive(
+      req.params.id,
+      customer.name,
+      archived,
+      auth.actorLabel(req)
+    );
+
+    res.json({ id: req.params.id, archived, name: customer.name });
+  } catch (error) {
+    sendStoreError(res, error, archivedErrorMessage(req));
+  }
+});
+
+function archivedErrorMessage(req) {
+  return req.body?.archived === false ? 'فشل استرجاع الزبون' : 'فشل أرشفة الزبون';
+}
+
 // 3.2 Merge a duplicate customer into the real one
 app.post('/api/customers/:id/merge', auth.requirePermission('canManageCustomers'), async (req, res) => {
   try {
@@ -334,7 +364,7 @@ app.get('/api/customers-duplicates/check', async (req, res) => {
 });
 
 // 4. Add a transaction (atomic: the ledger entry and the balance move together)
-app.post('/api/customers/:id/transactions', async (req, res) => {
+app.post('/api/customers/:id/transactions', auth.requirePermission('canRecordTransactions'), async (req, res) => {
   try {
     // Idempotency: a teller on a weak connection presses save, sees nothing, and
     // presses again. Replaying the stored result beats recording the money twice.
@@ -740,6 +770,35 @@ app.patch('/api/settings', auth.requirePermission('canManageSettings'), async (r
   }
 });
 
+// --- DEBT REMINDERS ---
+
+// Who currently owes the office money.
+app.get('/api/debts', auth.requirePermission('canViewReports'), async (req, res) => {
+  try {
+    const settings = await store.getSettings();
+    const debtors = await debtReminder.collectDebtors(
+      req.query.minAmount ?? settings.debtReminderMinAmount
+    );
+    res.json({
+      count: debtors.length,
+      totalDebt: debtors.reduce((sum, d) => sum + d.debt, 0),
+      debtors
+    });
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تحميل قائمة الديون');
+  }
+});
+
+// Send the reminder now, regardless of the schedule.
+app.post('/api/debts/remind', auth.requirePermission('canViewReports'), async (req, res) => {
+  try {
+    const result = await debtReminder.runReminder({ force: true });
+    res.status(result.ok ? 200 : 503).json(result);
+  } catch (error) {
+    sendStoreError(res, error, 'فشل إرسال التذكير');
+  }
+});
+
 // --- REPORTS ---
 
 // 8.4 Totals, daily trend and per-customer rows for a date range
@@ -1040,6 +1099,15 @@ app.get('/api/auth/me', auth.requireAuth, (req, res) => {
 });
 
 // --- USER MANAGEMENT (admin only) ---
+
+// The roles the server recognises, with their Arabic labels and what each grants.
+app.get('/api/roles', auth.requirePermission('canManageUsers'), (req, res) => {
+  res.json(users.ROLES.map(role => ({
+    role,
+    ...users.roleInfo(role),
+    permissions: users.permissionsFor(role)
+  })));
+});
 
 app.get('/api/users', auth.requirePermission('canManageUsers'), async (req, res) => {
   try {

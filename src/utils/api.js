@@ -104,6 +104,16 @@ export const api = {
     return res.json();
   },
 
+  // Archiving hides a customer from the daily list; it never deletes anything.
+  archiveCustomer: async (customerId, archived = true) => {
+    const res = await authFetch(`/customers/${customerId}/archive`, {
+      method: 'POST',
+      body: JSON.stringify({ archived })
+    });
+    if (!res.ok) throw await readError(res, archived ? 'فشل أرشفة الزبون' : 'فشل استرجاع الزبون');
+    return res.json();
+  },
+
   mergeCustomers: async (sourceId, targetId) => {
     const res = await authFetch(`/customers/${sourceId}/merge`, {
       method: 'POST',
@@ -152,7 +162,27 @@ export const api = {
     return res.json();
   },
 
-  // Users
+  // Roles and users
+  getRoles: async () => {
+    const res = await authFetch('/roles');
+    if (!res.ok) throw await readError(res, 'فشل تحميل الصلاحيات');
+    return res.json();
+  },
+
+  // Debts
+  getDebts: async () => {
+    const res = await authFetch('/debts');
+    if (!res.ok) throw await readError(res, 'فشل تحميل قائمة الديون');
+    return res.json();
+  },
+
+  sendDebtReminder: async () => {
+    const res = await authFetch('/debts/remind', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'فشل إرسال التذكير');
+    return data;
+  },
+
   getUsers: async () => {
     const res = await authFetch('/users');
     if (!res.ok) throw await readError(res, 'فشل تحميل المستخدمين');

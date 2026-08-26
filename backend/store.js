@@ -857,6 +857,20 @@ async function mergeCustomers(sourceId, targetId, actor) {
   return { movedTransactions: moved, targetId, sourceId };
 }
 
+/** Records an archive or restore in the audit trail, so hiding a customer is traceable. */
+async function recordCustomerArchive(customerId, customerName, archived, actor) {
+  await appendAuditLog(buildAuditEntry({
+    action: archived ? 'archive' : 'restore',
+    customerId,
+    customerName,
+    before: { archived: !archived },
+    after: { archived },
+    actor
+  }));
+
+  invalidateLedgerCache();
+}
+
 // ─── Idempotency ───
 //
 // A teller on a weak connection presses save, sees nothing happen, and presses
@@ -1091,7 +1105,15 @@ async function searchTransactions({
 
 // ─── Settings (opening cash, and anything else the office configures) ───
 
-const DEFAULT_SETTINGS = { openingCash: 0 };
+const DEFAULT_SETTINGS = {
+  openingCash: 0,
+  // Debt reminders — off until the owner turns them on.
+  debtReminderEnabled: false,
+  debtReminderDays: 7,
+  debtReminderMinAmount: 0,
+  debtReminderHour: 10,
+  debtReminderLastSent: null
+};
 
 async function getSettings() {
   if (db) {
@@ -1105,10 +1127,42 @@ async function getSettings() {
 
 async function updateSettings(patch) {
   const clean = {};
+
   if (patch.openingCash !== undefined) {
     const value = Number(patch.openingCash);
     if (!Number.isFinite(value)) throw badRequest('رأس المال الافتتاحي يجب أن يكون رقماً');
     clean.openingCash = roundMoney(value);
+  }
+
+  if (patch.debtReminderEnabled !== undefined) {
+    clean.debtReminderEnabled = !!patch.debtReminderEnabled;
+  }
+
+  if (patch.debtReminderDays !== undefined) {
+    const days = Math.round(Number(patch.debtReminderDays));
+    if (!Number.isFinite(days) || days < 1 || days > 365) {
+      throw badRequest('مدة التذكير يجب أن تكون بين يوم واحد و365 يوماً');
+    }
+    clean.debtReminderDays = days;
+  }
+
+  if (patch.debtReminderMinAmount !== undefined) {
+    const min = roundMoney(patch.debtReminderMinAmount);
+    if (!Number.isFinite(min) || min < 0) throw badRequest('أقل مبلغ يجب أن يكون صفراً أو أكثر');
+    clean.debtReminderMinAmount = min;
+  }
+
+  if (patch.debtReminderHour !== undefined) {
+    const hour = Math.round(Number(patch.debtReminderHour));
+    if (!Number.isFinite(hour) || hour < 0 || hour > 23) {
+      throw badRequest('ساعة التذكير يجب أن تكون بين 0 و23');
+    }
+    clean.debtReminderHour = hour;
+  }
+
+  // Written by the reminder itself, not by a person.
+  if (patch.debtReminderLastSent !== undefined) {
+    clean.debtReminderLastSent = patch.debtReminderLastSent;
   }
 
   if (Object.keys(clean).length === 0) throw badRequest('لا توجد إعدادات صالحة للحفظ');
@@ -1282,6 +1336,7 @@ module.exports = {
   searchTransactions,
   findPossibleDuplicates,
   updateCustomer,
+  recordCustomerArchive,
   mergeCustomers,
   getIdempotentResult,
   saveIdempotentResult,

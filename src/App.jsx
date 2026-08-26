@@ -9,6 +9,7 @@ import CashBox from './components/CashBox';
 import Reports from './components/Reports';
 import BackupPanel from './components/BackupPanel';
 import UsersPanel from './components/UsersPanel';
+import DebtReminder from './components/DebtReminder';
 import TransactionSearch from './components/TransactionSearch';
 import WelcomeTour, { shouldShowTour, resetTour } from './components/WelcomeTour';
 import SharedStatementView from './components/SharedStatementView';
@@ -230,6 +231,35 @@ export default function App() {
         return;
       }
       setAddCustError(err.message);
+    }
+  };
+
+  // Archiving asks first and says plainly that nothing is being deleted, because
+  // "حذف" on a money record is the one action people expect to be irreversible.
+  const handleArchiveCustomer = async (customer, archive) => {
+    const balance = Number(customer.balance) || 0;
+
+    const confirmText = archive
+      ? `أرشفة الزبون "${customer.name}"؟
+
+` +
+        `راح يختفي من قائمة الزبائن، بس كل عملياته وكشف حسابه يبقون محفوظين، ` +
+        `وتكدر ترجّعه بأي وقت من تبويب الأرشيف.` +
+        (balance !== 0
+          ? `
+
+⚠️ انتبه: رصيده الحالي ${Math.abs(balance).toLocaleString('en-US')} د.ع ` +
+            `(${balance > 0 ? 'له' : 'عليه'}) — وراح يظل محسوباً بالصندوق والتقارير.`
+          : '')
+      : `استرجاع الزبون "${customer.name}" لقائمة الزبائن؟`;
+
+    if (!window.confirm(confirmText)) return;
+
+    try {
+      await api.archiveCustomer(customer.id, archive);
+      await loadCustomers();
+    } catch (err) {
+      window.alert(err.message);
     }
   };
 
@@ -561,6 +591,7 @@ export default function App() {
                 customers={customers}
                 onSelectCustomer={openCustomerStatement}
                 onEditCustomer={openEditCustomer}
+                onArchiveCustomer={handleArchiveCustomer}
                 permissions={permissions}
                 onOpenTransaction={(cust) => setActiveTransactionCustomer(cust)}
                 onOpenAddCustomer={() => setShowAddCustomerModal(true)}
@@ -580,6 +611,7 @@ export default function App() {
             {activeTab === 'whatsapp' && permissions.canManageSettings && (
               <>
                 <WhatsAppSetup />
+                {permissions.canViewReports && <DebtReminder />}
                 <BackupPanel />
                 {permissions.canManageUsers && <UsersPanel />}
 

@@ -2,12 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../utils/api';
 import { Users as UsersIcon, UserPlus, Trash2, Pencil, ShieldCheck } from 'lucide-react';
 
-const ROLE_LABELS = {
-  admin: 'مدير (كل الصلاحيات)',
-  staff: 'موظف (تسجيل عمليات فقط)'
-};
-
-const EMPTY_FORM = { username: '', name: '', password: '', role: 'staff', phone: '' };
+const EMPTY_FORM = { username: '', name: '', password: '', role: 'teller', phone: '' };
 
 /**
  * Staff accounts.
@@ -18,6 +13,8 @@ const EMPTY_FORM = { username: '', name: '', password: '', role: 'staff', phone:
  */
 export default function UsersPanel() {
   const [list, setList] = useState([]);
+  // Roles come from the server so the picker can never offer one it does not honour.
+  const [roles, setRoles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
 
@@ -29,7 +26,9 @@ export default function UsersPanel() {
   const load = async () => {
     setLoading(true);
     try {
-      setList(await api.getUsers());
+      const [usersData, rolesData] = await Promise.all([api.getUsers(), api.getRoles()]);
+      setList(usersData);
+      setRoles(rolesData);
     } catch (err) {
       setMessage(`خطأ: ${err.message}`);
     } finally {
@@ -119,8 +118,30 @@ export default function UsersPanel() {
       </div>
 
       <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>
-        الموظف يسجّل العمليات فقط — لا يعدّل، لا يحذف، ولا يرى الأرباح والصندوق.
+        كل مستخدم بحساب منفصل وصلاحية تناسب شغله، والسجل يكتب اسمه على كل تعديل.
       </p>
+
+      {/* The full matrix, so choosing a role is not guesswork. */}
+      {roles.length > 0 && (
+        <div className="table-wrapper" style={{ marginBottom: '1rem' }}>
+          <table className="app-table cards-on-mobile">
+            <thead>
+              <tr>
+                <th>الصلاحية</th>
+                <th>شنو تسمح</th>
+              </tr>
+            </thead>
+            <tbody>
+              {roles.map(r => (
+                <tr key={r.role}>
+                  <td data-label="الصلاحية" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{r.label}</td>
+                  <td data-label="التفاصيل" style={{ fontSize: '13.5px', lineHeight: 1.7 }}>{r.description}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {message && (
         <div className={`toast ${message.includes('خطأ') ? 'toast-error' : 'toast-success'}`}>
@@ -176,9 +197,15 @@ export default function UsersPanel() {
               value={form.role}
               onChange={e => setForm({ ...form, role: e.target.value })}
             >
-              <option value="staff">{ROLE_LABELS.staff}</option>
-              <option value="admin">{ROLE_LABELS.admin}</option>
+              {roles.map(r => (
+                <option key={r.role} value={r.role}>{r.label}</option>
+              ))}
             </select>
+
+            {/* What the chosen role actually grants, in words. */}
+            <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: '0.4rem 0 0 0', lineHeight: 1.7 }}>
+              {roles.find(r => r.role === form.role)?.description || ''}
+            </p>
           </div>
 
           <div style={{ display: 'flex', gap: '0.75rem' }}>
@@ -218,7 +245,7 @@ export default function UsersPanel() {
                   <td style={{ direction: 'ltr', textAlign: 'left' }}>{user.username}</td>
                   <td>
                     <span className={`badge ${user.role === 'admin' ? 'badge-deposit' : 'badge-withdrawal'}`}>
-                      {user.role === 'admin' ? 'مدير' : 'موظف'}
+                      {user.roleLabel || user.role}
                     </span>
                   </td>
                   <td style={{ color: user.active === false ? 'var(--danger)' : 'var(--success)' }}>

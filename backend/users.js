@@ -5,11 +5,8 @@
  * ever say "admin" — useless for finding out who made a mistake. Each person now
  * gets their own account, and the audit log records their name.
  *
- * Two roles:
- *   admin — the owner: everything, including edits, deletes, money reports,
- *           user management and backups.
- *   staff — a teller: records transactions and reads customer accounts. Cannot
- *           edit or delete anything, and cannot see profits.
+ * Roles are defined below, one per real job in an office rather than a blunt
+ * admin/everyone-else split.
  *
  * Bootstrap: the ADMIN_PASSWORD_HASH from the environment stays valid as the
  * owner account. Without it, deploying this change would lock the owner out of
@@ -22,8 +19,45 @@ const bcrypt = require('bcryptjs');
 const { db } = require('./firebaseAdmin');
 const store = require('./store');
 
-const ROLES = ['admin', 'staff'];
+/**
+ * Roles, from most to least authority.
+ *
+ * An exchange office is not two kinds of person. The owner does everything; a
+ * branch manager runs the day without touching accounts or backups; an
+ * accountant reads the money but never moves it; a teller moves money but never
+ * sees the profit; and some people should only ever look. Each of those is a
+ * real job, so each gets a role instead of being forced into "admin" — which is
+ * how offices end up giving everyone full access.
+ *
+ * "staff" is kept as an alias of "teller" so accounts created before this stay
+ * exactly as they were.
+ */
+const ROLES = ['admin', 'manager', 'accountant', 'teller', 'viewer'];
 const ENV_OWNER_ID = 'env-owner';
+
+/** Arabic labels and one-line descriptions, shown wherever a role is picked. */
+const ROLE_INFO = {
+  admin: {
+    label: 'مدير عام',
+    description: 'كل الصلاحيات — بما فيها المستخدمين والإعدادات والنسخ الاحتياطي'
+  },
+  manager: {
+    label: 'مدير',
+    description: 'يدير الزبائن والعمليات ويشوف التقارير — بلا مستخدمين ولا إعدادات'
+  },
+  accountant: {
+    label: 'محاسب',
+    description: 'يشوف التقارير والصندوق والمصاريف — لا يسجّل ولا يعدّل عمليات'
+  },
+  teller: {
+    label: 'صرّاف',
+    description: 'يسجّل العمليات ويشوف الزبائن — لا يعدّل ولا يحذف ولا يشوف الأرباح'
+  },
+  viewer: {
+    label: 'مطّلع',
+    description: 'قراءة فقط — يشوف الزبائن وأرصدتهم بلا أي تعديل'
+  }
+};
 
 /** Permissions each role carries. Checked on the server, never trusted from the client. */
 const ROLE_PERMISSIONS = {
@@ -36,8 +70,36 @@ const ROLE_PERMISSIONS = {
     canManageBackup: true,
     canManageSettings: true
   },
-  staff: {
+  manager: {
     canRecordTransactions: true,
+    canEditLedger: true,
+    canManageCustomers: true,
+    canViewReports: true,
+    canManageUsers: false,
+    canManageBackup: false,
+    canManageSettings: false
+  },
+  accountant: {
+    // Reads the money, never moves it — the point of a separate pair of eyes.
+    canRecordTransactions: false,
+    canEditLedger: false,
+    canManageCustomers: false,
+    canViewReports: true,
+    canManageUsers: false,
+    canManageBackup: false,
+    canManageSettings: false
+  },
+  teller: {
+    canRecordTransactions: true,
+    canEditLedger: false,
+    canManageCustomers: false,
+    canViewReports: false,
+    canManageUsers: false,
+    canManageBackup: false,
+    canManageSettings: false
+  },
+  viewer: {
+    canRecordTransactions: false,
     canEditLedger: false,
     canManageCustomers: false,
     canViewReports: false,
@@ -47,8 +109,17 @@ const ROLE_PERMISSIONS = {
   }
 };
 
+// Accounts created before roles expanded carry "staff"; it means teller.
+ROLE_PERMISSIONS.staff = ROLE_PERMISSIONS.teller;
+ROLE_INFO.staff = ROLE_INFO.teller;
+
 function permissionsFor(role) {
-  return ROLE_PERMISSIONS[role] || ROLE_PERMISSIONS.staff;
+  // An unknown role gets the least authority, never the most.
+  return ROLE_PERMISSIONS[role] || ROLE_PERMISSIONS.viewer;
+}
+
+function roleInfo(role) {
+  return ROLE_INFO[role] || { label: role || 'غير معروف', description: '' };
 }
 
 function badRequest(message) {
@@ -73,7 +144,11 @@ function normalizeUsername(raw) {
 function publicUser(user) {
   if (!user) return null;
   const { passwordHash, ...rest } = user;
-  return { ...rest, permissions: permissionsFor(rest.role) };
+  return {
+    ...rest,
+    permissions: permissionsFor(rest.role),
+    roleLabel: roleInfo(rest.role).label
+  };
 }
 
 // ─── Storage ───
@@ -246,6 +321,8 @@ async function verifyCredentials(username, password, envPasswordCheck) {
 
 module.exports = {
   ROLES,
+  ROLE_INFO,
+  roleInfo,
   ENV_OWNER_ID,
   permissionsFor,
   publicUser,

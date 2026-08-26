@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { UserPlus, Search, FileText, ArrowLeftRight, User, Pencil } from 'lucide-react';
+import { UserPlus, Search, FileText, ArrowLeftRight, User, Pencil, Archive, RotateCcw } from 'lucide-react';
 
 export default function CustomerList({
   customers,
@@ -7,13 +7,19 @@ export default function CustomerList({
   onOpenTransaction,
   onOpenAddCustomer,
   onEditCustomer,
+  onArchiveCustomer,
   permissions = {}
 }) {
+  // The archive is a separate view rather than a filter on the same list: the
+  // daily screen should never make an archived customer look active.
+  const [showArchive, setShowArchive] = useState(false);
   const [search, setSearch] = useState('');
 
   // Filter customers by name or phone number
+  const archivedCount = customers.filter(c => c.archived === true).length;
+
   // Archived customers (merged away or retired) are hidden from the daily list.
-  const filteredCustomers = customers.filter(c => c.archived !== true).filter(c => {
+  const filteredCustomers = customers.filter(c => (c.archived === true) === showArchive).filter(c => {
     const term = search.toLowerCase();
     return (
       c.name.toLowerCase().includes(term) ||
@@ -24,12 +30,44 @@ export default function CustomerList({
   return (
     <div className="panel-card">
       <div className="panel-header">
-        <h2>إدارة وعرض حسابات الزبائن</h2>
-        <button className="btn btn-primary" onClick={onOpenAddCustomer}>
-          <UserPlus size={20} />
-          إضافة زبون جديد
-        </button>
+        <h2>{showArchive ? 'أرشيف الزبائن' : 'إدارة وعرض حسابات الزبائن'}</h2>
+        {!showArchive && permissions.canRecordTransactions !== false && (
+          <button className="btn btn-primary" onClick={onOpenAddCustomer}>
+            <UserPlus size={20} />
+            إضافة زبون جديد
+          </button>
+        )}
       </div>
+
+      {/* Switching between the working list and the archive */}
+      {(archivedCount > 0 || showArchive) && (
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+          <button
+            className={`btn ${!showArchive ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setShowArchive(false)}
+            style={{ flex: 1, padding: '0.55rem' }}
+          >
+            الزبائن النشطون
+          </button>
+          <button
+            className={`btn ${showArchive ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setShowArchive(true)}
+            style={{ flex: 1, padding: '0.55rem' }}
+          >
+            <Archive size={17} />
+            الأرشيف ({archivedCount})
+          </button>
+        </div>
+      )}
+
+      {showArchive && (
+        <div className="toast" style={{
+          backgroundColor: 'rgba(100,116,139,.1)', color: 'var(--text-main)',
+          borderColor: 'var(--text-muted)'
+        }}>
+          هؤلاء الزبائن مخفيون من القائمة اليومية فقط. كل عملياتهم محفوظة، وتكدر ترجّعهم بأي وقت.
+        </div>
+      )}
 
       {/* Large Search Bar */}
       <div className="search-wrapper">
@@ -46,7 +84,11 @@ export default function CustomerList({
       {/* Customer Ledger Table */}
       {filteredCustomers.length === 0 ? (
         <p style={{ textAlign: 'center', color: 'var(--text-muted)', margin: '4rem 0' }}>
-          {search ? 'لم يتم العثور على أي زبون مطابق للبحث.' : 'لا يوجد زبائن مسجلين حالياً. اضغط على زر "إضافة زبون جديد" بالأعلى للبدء.'}
+          {search
+            ? 'لم يتم العثور على أي زبون مطابق للبحث.'
+            : showArchive
+              ? 'الأرشيف فارغ — ما أرشفت أي زبون بعد.'
+              : 'لا يوجد زبائن مسجلين حالياً. اضغط على زر "إضافة زبون جديد" بالأعلى للبدء.'}
         </p>
       ) : (
         <div className="table-wrapper">
@@ -109,6 +151,19 @@ export default function CustomerList({
                             title="تعديل بيانات الزبون"
                           >
                             <Pencil size={16} />
+                          </button>
+                        )}
+
+                        {/* Archive, or bring one back. Never a delete — the
+                            ledger is the record that the money moved. */}
+                        {permissions.canManageCustomers && onArchiveCustomer && (
+                          <button
+                            className={`btn ${showArchive ? 'btn-success' : 'btn-danger'}`}
+                            style={{ padding: '0.5rem 0.75rem', fontSize: '16px', borderRadius: '8px' }}
+                            onClick={() => onArchiveCustomer(c, !showArchive)}
+                            title={showArchive ? 'استرجاع الزبون' : 'أرشفة الزبون'}
+                          >
+                            {showArchive ? <RotateCcw size={16} /> : <Archive size={16} />}
                           </button>
                         )}
 

@@ -34,7 +34,26 @@ app.use((req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+// The frontend is served by this same server in production, so cross-origin
+// access is not needed. Anything else must be named explicitly — an open policy
+// lets any website on the internet call this API with a stolen token.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // No Origin header: same-origin navigation, curl, or the WhatsApp bot.
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    // Vite dev server.
+    if (process.env.NODE_ENV !== 'production' && /^http:\/\/localhost:\d+$/.test(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error('Origin not allowed by CORS'));
+  }
+}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -87,21 +106,8 @@ async function readData() {
   }
 }
 
-// Helper function to write to database (Dual Mode)
-async function writeData(data) {
-  // Always write to local file for backup/safety
-  try {
-    await fs.writeJson(LOCAL_DB_PATH, data, { spaces: 2 });
-  } catch (err) {
-    console.error("Error writing to local file backup:", err);
-  }
-
-  if (db) {
-    // We don't overwrite the whole Firestore, we manage documents individually
-    // This helper is mainly for local sync. In full Cloud mode, API endpoints will write to Firestore directly.
-    console.log("Firebase Firestore is active, database operations will write directly to cloud docs.");
-  }
-}
+// Local writes go through store.mutateLocal so they share the ledger's lock.
+// There is deliberately no unlocked write helper here any more.
 
 /**
  * Records who opened (or tried to open) a customer's shared statement link.
@@ -120,12 +126,12 @@ async function logSharedAccess(customer, req, success) {
       const updatedLog = share.appendAccessLog(customer.sharedAccessLog, entry);
       await docRef.update({ sharedAccessLog: updatedLog });
     } else {
-      const data = await readData();
-      const target = data.customers.find(c => c.id === customer.id);
-      if (target) {
-        target.sharedAccessLog = share.appendAccessLog(target.sharedAccessLog, entry);
-        await writeData(data);
-      }
+      await store.mutateLocal(data => {
+        const target = data.customers.find(c => c.id === customer.id);
+        if (target) {
+          target.sharedAccessLog = share.appendAccessLog(target.sharedAccessLog, entry);
+        }
+      });
     }
   } catch (err) {
     console.error('[SHARE] Failed to record access log:', err.message);
@@ -184,7 +190,7 @@ app.get('/api/customers', async (req, res) => {
 // 2.1 Get one customer with their ledger
 app.get('/api/customers/:id', async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 500, 2000);
+    const limit = Math.min(Number(req.query.limit) || 2000, 5000);
     res.json(await store.getCustomer(req.params.id, { limit }));
   } catch (error) {
     sendStoreError(res, error, 'فشل تحميل بيانات الزبون');
@@ -292,13 +298,14 @@ app.post('/api/customers/:id/share', async (req, res) => {
       await docRef.update(update);
       return res.json(update);
     } else {
-      const data = await readData();
-      const customer = data.customers.find(c => c.id === customerId);
-      if (!customer) return res.status(404).json({ error: 'Customer not found' });
+      const found = await store.mutateLocal(data => {
+        const customer = data.customers.find(c => c.id === customerId);
+        if (!customer) return false;
+        Object.assign(customer, update);
+        return true;
+      });
 
-      Object.assign(customer, update);
-      await writeData(data);
-
+      if (!found) return res.status(404).json({ error: 'Customer not found' });
       return res.json(update);
     }
   } catch (error) {
@@ -388,11 +395,8 @@ app.post('/api/expenses', async (req, res) => {
       const docRef = await db.collection('expenses').add(newExpense);
       return res.status(201).json({ id: docRef.id, ...newExpense });
     } else {
-      const data = await readData();
-      const id = Date.now().toString();
-      const expenseWithId = { id, ...newExpense };
-      data.expenses.push(expenseWithId);
-      await writeData(data);
+      const expenseWithId = { id: Date.now().toString(), ...newExpense };
+      await store.mutateLocal(data => { data.expenses.push(expenseWithId); });
       return res.status(201).json(expenseWithId);
     }
   } catch (error) {
@@ -409,9 +413,9 @@ app.delete('/api/expenses/:id', async (req, res) => {
       await db.collection('expenses').doc(expenseId).delete();
       return res.json({ message: 'Expense deleted successfully' });
     } else {
-      const data = await readData();
-      data.expenses = data.expenses.filter(e => e.id !== expenseId);
-      await writeData(data);
+      await store.mutateLocal(data => {
+        data.expenses = data.expenses.filter(e => e.id !== expenseId);
+      });
       return res.json({ message: 'Expense deleted successfully' });
     }
   } catch (error) {

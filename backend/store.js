@@ -118,6 +118,22 @@ async function writeLocal(data) {
   await fs.writeJson(LOCAL_DB_PATH, data, { spaces: 2 });
 }
 
+/**
+ * Read-modify-write the local database under the same lock the ledger uses.
+ *
+ * Any code path that reads the file, mutates it and writes it back must go
+ * through here. A write that skips the lock overwrites the whole file and can
+ * erase a transaction another request just committed.
+ */
+async function mutateLocal(mutator) {
+  return withLocalLock(async () => {
+    const data = await readLocal();
+    const result = await mutator(data);
+    await writeLocal(data);
+    return result;
+  });
+}
+
 // ─── Audit trail ───
 
 function buildAuditEntry({ action, customerId, customerName, txId, before, after, actor }) {
@@ -249,8 +265,15 @@ async function listCustomers() {
   return data.customers.map(({ transactions, ...rest }) => rest);
 }
 
-/** One customer with their transactions, newest first. */
-async function getCustomer(customerId, { limit = 500 } = {}) {
+/**
+ * One customer with their transactions, newest first.
+ *
+ * `transactionsTruncated` is part of the contract, not a detail: a statement
+ * computes its opening balance by walking the ledger from the beginning, so a
+ * silently shortened list produces confidently wrong numbers. The caller has to
+ * be able to tell that it is not looking at the whole history.
+ */
+async function getCustomer(customerId, { limit = 2000 } = {}) {
   if (db) {
     await ensureMigrated(customerId);
 
@@ -258,17 +281,22 @@ async function getCustomer(customerId, { limit = 500 } = {}) {
     const doc = await docRef.get();
     if (!doc.exists) throw notFound('الزبون غير موجود');
 
+    // Fetch one extra row purely to detect that more exist.
     const txSnap = await docRef
       .collection('transactions')
       .orderBy('date', 'desc')
-      .limit(limit)
+      .limit(limit + 1)
       .get();
+
+    const all = txSnap.docs.map(d => d.data());
+    const truncated = all.length > limit;
 
     const { transactions, ...rest } = doc.data();
     return {
       id: doc.id,
       ...rest,
-      transactions: txSnap.docs.map(d => d.data())
+      transactions: truncated ? all.slice(0, limit) : all,
+      transactionsTruncated: truncated
     };
   }
 
@@ -279,7 +307,12 @@ async function getCustomer(customerId, { limit = 500 } = {}) {
   const txs = [...(customer.transactions || [])].sort(
     (a, b) => new Date(b.date) - new Date(a.date)
   );
-  return { ...customer, transactions: txs.slice(0, limit) };
+
+  return {
+    ...customer,
+    transactions: txs.slice(0, limit),
+    transactionsTruncated: txs.length > limit
+  };
 }
 
 /** Finds a customer by their public share token, including transactions. */
@@ -892,5 +925,6 @@ module.exports = {
   exportEverything,
   readLocal,
   writeLocal,
-  withLocalLock
+  withLocalLock,
+  mutateLocal
 };

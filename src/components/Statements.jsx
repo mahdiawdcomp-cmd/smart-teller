@@ -411,6 +411,15 @@ export default function Statements({ customer, onBack, onLedgerChanged }) {
         </div>
       </div>
 
+      {/* A partial ledger would make the opening balance and every running total
+          wrong, so it is never presented as if it were the full history. */}
+      {customer.transactionsTruncated && (
+        <div className="toast toast-error">
+          تنبيه: هذا الزبون لديه عمليات أكثر مما يمكن عرضه دفعة واحدة. الكشف يعرض الأحدث فقط،
+          والرصيد الافتتاحي المعروض في الـ PDF قد لا يشمل العمليات الأقدم.
+        </div>
+      )}
+
       {statusMessage && (
         <div className={`toast ${statusMessage.includes('خطأ') ? 'toast-error' : 'toast-success'}`}>
           {statusMessage}

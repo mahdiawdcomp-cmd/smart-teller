@@ -360,11 +360,20 @@ export const api = {
     return res.json();
   },
 
-  // Backup
+  // Backup — the file is binary (gzipped, and encrypted when configured),
+  // so it must be read as a blob rather than as text.
   downloadBackup: async () => {
     const res = await authFetch('/backup/export');
     if (!res.ok) throw await readError(res, 'فشل تصدير النسخة الاحتياطية');
-    return res.text();
+
+    const disposition = res.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+
+    return {
+      blob: await res.blob(),
+      fileName: match ? match[1] : `smart-teller-backup-${new Date().toISOString().slice(0,10)}.stb`,
+      encrypted: res.headers.get('x-backup-encrypted') === 'true'
+    };
   },
 
   runBackup: async () => {

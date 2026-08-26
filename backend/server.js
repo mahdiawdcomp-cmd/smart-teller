@@ -732,14 +732,21 @@ app.get('/api/reports', auth.requirePermission('canViewReports'), async (req, re
 // --- BACKUP ---
 
 // 10.1 Download a full snapshot on demand
+//
+// Uses the same builder as the scheduled backup, so a manually downloaded file
+// is encrypted exactly like the one sent to WhatsApp. Handing out a plaintext
+// copy here would have quietly undone the encryption everywhere else — the file
+// ends up in the same phone's downloads either way.
 app.get('/api/backup/export', auth.requirePermission('canManageBackup'), async (req, res) => {
   try {
-    const snapshot = await store.exportEverything();
-    const stamp = new Date().toISOString().slice(0, 10);
+    const built = await backup.buildBackupFile();
 
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="smart-teller-backup-${stamp}.json"`);
-    res.send(JSON.stringify(snapshot, null, 2));
+    res.setHeader('Content-Type', built.encrypted
+      ? 'application/octet-stream'
+      : 'application/gzip');
+    res.setHeader('Content-Disposition', `attachment; filename="${built.fileName}"`);
+    res.setHeader('X-Backup-Encrypted', built.encrypted ? 'true' : 'false');
+    res.send(built.buffer);
   } catch (error) {
     sendStoreError(res, error, 'فشل تصدير النسخة الاحتياطية');
   }

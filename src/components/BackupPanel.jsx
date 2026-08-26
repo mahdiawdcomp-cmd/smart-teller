@@ -27,18 +27,19 @@ export default function BackupPanel() {
     setBusy('download');
     setMessage('');
     try {
-      const json = await api.downloadBackup();
-      const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+      const { blob, fileName, encrypted } = await api.downloadBackup();
       const url = URL.createObjectURL(blob);
 
       const link = document.createElement('a');
       link.href = url;
-      link.download = `smart-teller-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      link.download = fileName;
       link.click();
       URL.revokeObjectURL(url);
 
-      setMessage('تم تنزيل النسخة الاحتياطية ✅');
-      setTimeout(() => setMessage(''), 4000);
+      setMessage(encrypted
+        ? 'تم تنزيل النسخة الاحتياطية (مشفّرة) ✅'
+        : 'تم تنزيل النسخة الاحتياطية — تحذير: غير مشفّرة');
+      setTimeout(() => setMessage(''), 5000);
     } catch (err) {
       setMessage(`خطأ: ${err.message}`);
     } finally {

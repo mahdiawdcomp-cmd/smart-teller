@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../utils/api';
 import { Search, Loader, FileText } from 'lucide-react';
 
@@ -19,19 +19,47 @@ export default function TransactionSearch({ onOpenCustomer }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Identifies the newest request. A slow reply from an earlier keystroke must
+  // not overwrite the results of a later one.
+  const requestId = useRef(0);
+
   const runSearch = async (e) => {
     if (e) e.preventDefault();
 
+    const id = ++requestId.current;
     setLoading(true);
     setError('');
     try {
-      setResult(await api.searchTransactions(filters));
+      const data = await api.searchTransactions(filters);
+      if (id === requestId.current) setResult(data);
     } catch (err) {
-      setError(err.message);
+      if (id === requestId.current) setError(err.message);
     } finally {
-      setLoading(false);
+      if (id === requestId.current) setLoading(false);
     }
   };
+
+  /**
+   * Searches as you type.
+   *
+   * Debounced so a five-letter name is one request instead of five, and skipped
+   * entirely when every field is empty — an empty query would pull the whole
+   * ledger of every customer for nothing.
+   */
+  useEffect(() => {
+    const hasAnyFilter = Object.values(filters).some(v => String(v || '').trim() !== '');
+
+    if (!hasAnyFilter) {
+      requestId.current++;   // cancel anything still in flight
+      setResult(null);
+      setLoading(false);
+      setError('');
+      return;
+    }
+
+    const timer = setTimeout(() => { runSearch(); }, 350);
+    return () => clearTimeout(timer);
+  }, [filters.q, filters.from, filters.to, filters.type, filters.minAmount, filters.maxAmount]);
 
   const clear = () => {
     setFilters({ q: '', from: '', to: '', type: '', minAmount: '', maxAmount: '' });
@@ -104,7 +132,9 @@ export default function TransactionSearch({ onOpenCustomer }) {
 
           {error && <div className="toast toast-error">{error}</div>}
 
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
+          {/* Results follow what you type; the button stays for a deliberate
+              re-run and for anyone who reaches for it out of habit. */}
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
             <button type="button" className="btn btn-secondary" onClick={clear}>
               مسح
             </button>
@@ -113,6 +143,10 @@ export default function TransactionSearch({ onOpenCustomer }) {
               {loading ? 'جاري البحث...' : 'بحث'}
             </button>
           </div>
+
+          <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', margin: '0.6rem 0 0 0' }}>
+            النتائج تظهر تلقائياً وأنت تكتب
+          </p>
         </form>
       </div>
 
@@ -133,7 +167,7 @@ export default function TransactionSearch({ onOpenCustomer }) {
             </p>
           ) : (
             <div className="table-wrapper">
-              <table className="app-table">
+              <table className="app-table cards-on-mobile">
                 <thead>
                   <tr>
                     <th>التاريخ</th>
@@ -151,23 +185,23 @@ export default function TransactionSearch({ onOpenCustomer }) {
 
                     return (
                       <tr key={`${tx.customerId}-${tx.id}`}>
-                        <td style={{ fontSize: '14px' }}>
+                        <td data-label="التاريخ" style={{ fontSize: '14px' }}>
                           {new Date(tx.date).toLocaleString('ar-EG')}
                         </td>
-                        <td style={{ fontWeight: 'bold' }}>{tx.customerName}</td>
-                        <td>
+                        <td data-label="الزبون" style={{ fontWeight: 'bold' }}>{tx.customerName}</td>
+                        <td data-label="النوع">
                           <span className={`badge ${tx.type === 'deposit' ? 'badge-deposit' : 'badge-withdrawal'}`}>
                             {tx.type === 'deposit' ? 'إيداع' : 'سحب'}
                           </span>
                         </td>
-                        <td style={{
+                        <td data-label="المبلغ" style={{
                           fontWeight: 'bold',
                           color: tx.type === 'deposit' ? 'var(--success)' : 'var(--danger)'
                         }}>
                           {fmt(total)} د.ع
                         </td>
-                        <td style={{ fontSize: '14px' }}>{tx.notes || '-'}</td>
-                        <td>
+                        <td data-label="ملاحظات" style={{ fontSize: '14px' }}>{tx.notes || '-'}</td>
+                        <td data-label="">
                           {onOpenCustomer && (
                             <button
                               className="btn btn-secondary"

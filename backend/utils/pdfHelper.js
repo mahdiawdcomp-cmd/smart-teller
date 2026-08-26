@@ -48,6 +48,23 @@ function fmt(n) {
   return Number(n || 0).toLocaleString('en-US');
 }
 
+/**
+ * Escapes a value before it is placed into the PDF's HTML.
+ *
+ * Customer names and notes are attacker-controlled text: anyone who can get a
+ * name into the system decides what markup lands in this document. Puppeteer
+ * renders it as a real page, so unescaped input is script execution inside the
+ * PDF renderer, not a cosmetic problem.
+ */
+function esc(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ─── Build the full HTML template ───
 function buildHtml(customerName, transactions, periodText, balance, openingBalance, finalBalance) {
 
@@ -67,9 +84,10 @@ function buildHtml(customerName, transactions, periodText, balance, openingBalan
   (transactions || []).forEach((tx, idx) => {
     const dateStr = new Date(tx.date).toLocaleDateString('en-US');
 
-    let displayNotes = tx.notes || '-';
+    // Escaped here, once, so the row template below cannot reintroduce markup.
+    let displayNotes = esc(tx.notes || '-');
     if (tx.type === 'withdrawal' && tx.commission > 0) {
-      displayNotes = `${tx.notes || ''} (العمولة: ${fmt(tx.commission)} د.ع)`;
+      displayNotes = `${esc(tx.notes || '')} (العمولة: ${fmt(tx.commission)} د.ع)`;
     }
 
     const totalAmount = tx.type === 'withdrawal'
@@ -216,11 +234,11 @@ tr { page-break-inside: avoid; }
 
 <div class="header">
   <h1>كشف حساب الصراف الذكي</h1>
-  <div class="period">تاريخ الكشف: ${periodText || 'كامل المدة'}</div>
+  <div class="period">تاريخ الكشف: ${esc(periodText || 'كامل المدة')}</div>
 </div>
 
 <div class="info-card">
-  <p>اسم الزبون: ${customerName}</p>
+  <p>اسم الزبون: ${esc(customerName)}</p>
   <p>الرصيد الكلي الحالي للمكتب: ${fmt(balance)} د.ع</p>
 </div>
 
@@ -365,18 +383,18 @@ td:last-child { font-weight: 700; }
 <body>
   <div class="card">
     <div class="head">
-      <h1>${officeName}</h1>
+      <h1>${esc(officeName)}</h1>
       <p>وصل عملية مالية</p>
     </div>
     <div class="body">
       <table>
-        <tr><td>الزبون</td><td>${customerName}</td></tr>
+        <tr><td>الزبون</td><td>${esc(customerName)}</td></tr>
         <tr><td>نوع العملية</td><td>${typeLabel}</td></tr>
         <tr><td>التاريخ والوقت</td><td>${when}</td></tr>
         <tr><td>المبلغ</td><td>${fmt(transaction.amount)} د.ع</td></tr>
         ${commissionRow}
         <tr class="total"><td>الإجمالي</td><td>${fmt(total)} د.ع</td></tr>
-        ${transaction.notes ? `<tr><td>الملاحظات</td><td>${transaction.notes}</td></tr>` : ''}
+        ${transaction.notes ? `<tr><td>الملاحظات</td><td>${esc(transaction.notes)}</td></tr>` : ''}
       </table>
 
       <div class="balance">
@@ -385,8 +403,8 @@ td:last-child { font-weight: 700; }
       </div>
 
       <div class="foot">
-        رقم الوصل: ${transaction.id}<br>
-        ${issuedBy ? `أصدره: ${issuedBy}<br>` : ''}
+        رقم الوصل: ${esc(transaction.id)}<br>
+        ${issuedBy ? `أصدره: ${esc(issuedBy)}<br>` : ''}
         يُرجى الاحتفاظ بهذا الوصل للمراجعة.
       </div>
     </div>

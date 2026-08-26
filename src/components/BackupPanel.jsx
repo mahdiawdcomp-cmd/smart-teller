@@ -74,6 +74,25 @@ export default function BackupPanel() {
         نسخة كاملة تلقائية تُرسل يومياً إلى واتساب المالك الساعة الثانية فجراً. احتفظ بالملفات — هي خط الدفاع الأخير عن بياناتك.
       </p>
 
+      {/* An unencrypted backup is the biggest data exposure in the system: one
+          forwardable file holding every customer, phone number and balance. */}
+      {lastRun && lastRun.ok && lastRun.encrypted === false && (
+        <div className="toast toast-error">
+          <strong>تحذير:</strong> النسخة الاحتياطية تُرسل بدون تشفير.
+          اضبط <span style={{ direction: 'ltr', display: 'inline-block' }}>BACKUP_PASSPHRASE</span> في
+          إعدادات الخادم — الملف الحالي يحتوي كل أسماء الزبائن وأرقامهم وأرصدتهم بشكل مقروء.
+        </div>
+      )}
+
+      {lastRun && lastRun.encrypted && (
+        <div className="toast toast-success">
+          🔐 النسخ مشفّرة. لفتح ملف:
+          <code style={{ display: 'block', direction: 'ltr', textAlign: 'left', marginTop: '4px', fontSize: '12px' }}>
+            node backend/scripts/decryptBackup.js file.stb "your-passphrase"
+          </code>
+        </div>
+      )}
+
       {message && (
         <div className={`toast ${message.includes('خطأ') ? 'toast-error' : 'toast-success'}`}>
           {message}

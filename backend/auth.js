@@ -81,6 +81,60 @@ async function verifyPassword(candidate) {
   return crypto.timingSafeEqual(expected, given);
 }
 
+// ─── Per-account lockout ───
+//
+// The IP rate limit alone is not enough: an attacker with a pool of addresses
+// walks straight past it, and a legitimate office behind one connection gets
+// punished for a colleague's typo. This counts failures per username instead.
+
+const ACCOUNT_LOCK_THRESHOLD = 8;
+const ACCOUNT_LOCK_WINDOW_MS = 15 * 60 * 1000;
+
+const accountFailures = new Map(); // username -> { failures: number[], lockedUntil }
+
+function accountKey(username) {
+  return String(username || '').trim().toLowerCase();
+}
+
+/** Returns { locked, retryAfterSeconds } for an account before its password is checked. */
+function checkAccountLock(username) {
+  const key = accountKey(username);
+  const record = accountFailures.get(key);
+  if (!record) return { locked: false };
+
+  if (record.lockedUntil && record.lockedUntil > Date.now()) {
+    return { locked: true, retryAfterSeconds: Math.ceil((record.lockedUntil - Date.now()) / 1000) };
+  }
+
+  return { locked: false };
+}
+
+function recordLoginFailure(username) {
+  const key = accountKey(username);
+  const cutoff = Date.now() - ACCOUNT_LOCK_WINDOW_MS;
+
+  const record = accountFailures.get(key) || { failures: [], lockedUntil: 0 };
+  record.failures = record.failures.filter(t => t > cutoff);
+  record.failures.push(Date.now());
+
+  if (record.failures.length >= ACCOUNT_LOCK_THRESHOLD) {
+    record.lockedUntil = Date.now() + ACCOUNT_LOCK_WINDOW_MS;
+    record.failures = [];
+  }
+
+  accountFailures.set(key, record);
+
+  // Bounded so a flood of invented usernames cannot grow this without limit.
+  if (accountFailures.size > 500) {
+    const oldest = accountFailures.keys().next().value;
+    accountFailures.delete(oldest);
+  }
+}
+
+function clearLoginFailures(username) {
+  accountFailures.delete(accountKey(username));
+}
+
 // ─── OTP sessions ───
 
 /** otpSessionId -> { codeHash, expiresAt, attempts } */
@@ -174,6 +228,52 @@ function issueToken(user) {
   );
 }
 
+/**
+ * Accounts whose state was checked recently.
+ *
+ * A signed token stays valid until it expires, so without this a dismissed
+ * employee keeps full access for the rest of the token's life. Each request
+ * re-checks the account, cached briefly so it costs one read per user per
+ * 30 seconds rather than one per request.
+ */
+const userStateCache = new Map(); // userId -> { checkedAt, active, role }
+const USER_STATE_TTL_MS = 30 * 1000;
+
+function invalidateUserState(userId) {
+  if (userId) userStateCache.delete(userId);
+  else userStateCache.clear();
+}
+
+/** Returns { ok, reason, role } for the account behind a token. */
+async function checkUserState(payload) {
+  // The environment owner is configuration, not a database row.
+  if (payload.sub === 'env-owner') return { ok: true, role: 'admin' };
+
+  const cached = userStateCache.get(payload.sub);
+  if (cached && Date.now() - cached.checkedAt < USER_STATE_TTL_MS) {
+    return cached.active
+      ? { ok: true, role: cached.role }
+      : { ok: false, reason: 'DISABLED' };
+  }
+
+  const users = require('./users');
+  const user = await users.findById(payload.sub);
+
+  if (!user) {
+    userStateCache.delete(payload.sub);
+    return { ok: false, reason: 'DELETED' };
+  }
+
+  userStateCache.set(payload.sub, {
+    checkedAt: Date.now(),
+    active: user.active !== false,
+    role: user.role
+  });
+
+  if (user.active === false) return { ok: false, reason: 'DISABLED' };
+  return { ok: true, role: user.role };
+}
+
 /** Express middleware — rejects any request without a valid admin token. */
 function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
@@ -188,8 +288,28 @@ function requireAuth(req, res, next) {
     if (!payload.role) {
       return res.status(403).json({ error: 'صلاحية غير كافية', code: 'FORBIDDEN' });
     }
-    req.auth = payload;
-    return next();
+    // The token is authentic; the account behind it still has to exist and be active.
+    checkUserState(payload)
+      .then(state => {
+        if (!state.ok) {
+          return res.status(401).json({
+            error: state.reason === 'DELETED'
+              ? 'هذا الحساب لم يعد موجوداً'
+              : 'تم إيقاف هذا الحساب، راجع المدير',
+            code: state.reason
+          });
+        }
+
+        // The role comes from the account as it is now, not as it was at login,
+        // so a demotion takes effect without waiting for the token to expire.
+        req.auth = { ...payload, role: state.role };
+        return next();
+      })
+      .catch(err => {
+        console.error('[AUTH] Could not verify account state:', err.message);
+        return res.status(503).json({ error: 'تعذّر التحقق من الحساب، حاول مجدداً' });
+      });
+    return;
   } catch (err) {
     const expired = err.name === 'TokenExpiredError';
     return res.status(401).json({
@@ -209,6 +329,11 @@ function requirePermission(permission) {
     const allowed = users.permissionsFor(req.auth?.role)[permission];
 
     if (!allowed) {
+      // Recorded: a staff account probing owner-only routes is worth seeing.
+      console.warn(
+        `[AUTH] Denied ${req.method} ${req.originalUrl} to ` +
+        `${req.auth?.username || 'unknown'} (${req.auth?.role || 'no role'}) — needs ${permission}`
+      );
       return res.status(403).json({
         error: 'هذه العملية تتطلب صلاحية المدير',
         code: 'FORBIDDEN'
@@ -229,6 +354,10 @@ function actorLabel(req) {
 module.exports = {
   assertConfigured,
   requirePermission,
+  invalidateUserState,
+  checkAccountLock,
+  recordLoginFailure,
+  clearLoginFailures,
   actorLabel,
   verifyPassword,
   createOtpSession,

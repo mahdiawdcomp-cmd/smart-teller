@@ -55,8 +55,43 @@ app.use(cors({
     return callback(new Error('Origin not allowed by CORS'));
   }
 }));
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+/**
+ * Security headers.
+ *
+ * Written out rather than pulled from a package so each one is visible and
+ * justified. The app is a single same-origin page, so the policy can be strict.
+ */
+app.use((req, res, next) => {
+  // Never let this be framed — clickjacking on a page that moves money.
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; " +
+    "script-src 'self'; " +
+    "style-src 'self' 'unsafe-inline'; " +   // inline styles are used throughout the UI
+    "img-src 'self' data:; " +               // QR codes arrive as data URLs
+    "font-src 'self' data:; " +
+    "connect-src 'self'; " +
+    "object-src 'none'; " +
+    "base-uri 'none'; " +
+    "form-action 'self'; " +
+    "frame-ancestors 'none'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  // Render terminates TLS; tell browsers never to try this host over plain HTTP.
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
+
+// A statement PDF travels as base64, so those two routes need room. Everything
+// else is small, and a 50MB ceiling on every endpoint was free memory pressure.
+const LARGE_BODY_ROUTES = ['/api/whatsapp/send-statement', '/api/pdf/generate'];
+
+app.use((req, res, next) => {
+  const limit = LARGE_BODY_ROUTES.includes(req.path) ? '25mb' : '256kb';
+  express.json({ limit })(req, res, next);
+});
+app.use(express.urlencoded({ limit: '256kb', extended: true }));
 
 // Import Firebase Admin initializers
 const { db } = require('./firebaseAdmin');
@@ -212,6 +247,13 @@ app.post('/api/customers', async (req, res) => {
     const { name, phone } = req.body;
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'اسم الزبون مطلوب' });
+    }
+    // Bounded so a single record cannot be used to bloat storage or a PDF.
+    if (String(name).length > 120) {
+      return res.status(400).json({ error: 'اسم الزبون طويل جداً (الحد 120 حرفاً)' });
+    }
+    if (phone && String(phone).length > 30) {
+      return res.status(400).json({ error: 'رقم الهاتف غير صحيح' });
     }
 
     // A duplicate customer splits one person's money across two accounts and
@@ -454,6 +496,9 @@ app.post('/api/expenses', auth.requirePermission('canViewReports'), async (req, 
   try {
     const { title, amount, notes, date } = req.body;
     if (!title || !amount) return res.status(400).json({ error: 'يجب إدخال العنوان والمبلغ' });
+    if (String(title).length > 200) {
+      return res.status(400).json({ error: 'عنوان المصروف طويل جداً' });
+    }
 
     const parsedAmount = store.roundMoney(amount);
     if (!Number.isFinite(Number(amount)) || parsedAmount <= 0) {
@@ -834,17 +879,28 @@ app.post('/api/pdf/generate', async (req, res) => {
 app.post('/api/auth/login', loginLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
+    const account = username || 'owner'; // an older client means the owner account
 
-    // No username means an older client: treat it as the owner account.
-    const user = await users.verifyCredentials(
-      username || 'owner',
-      password,
-      auth.verifyPassword
-    );
+    // Per-account lockout, checked before the password so a locked account costs
+    // an attacker nothing to discover and gains them nothing to keep trying.
+    const lock = auth.checkAccountLock(account);
+    if (lock.locked) {
+      const minutes = Math.ceil(lock.retryAfterSeconds / 60);
+      return res.status(429).json({
+        error: `تم إيقاف هذا الحساب مؤقتاً بسبب محاولات خاطئة متكررة. حاول بعد ${minutes} دقيقة.`
+      });
+    }
+
+    const user = await users.verifyCredentials(account, password, auth.verifyPassword);
 
     if (!user) {
+      auth.recordLoginFailure(account);
+      console.warn(`[AUTH] Failed login for "${account}" from ${share.clientIp(req)}`);
+      // Deliberately does not say which half was wrong.
       return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور خاطئة!' });
     }
+
+    auth.clearLoginFailures(account);
 
     // Two-factor protects the owner account, which is the one that can move money
     // around and manage everyone else. Staff sign in with a password alone.
@@ -970,7 +1026,10 @@ app.post('/api/users', auth.requirePermission('canManageUsers'), async (req, res
 
 app.patch('/api/users/:id', auth.requirePermission('canManageUsers'), async (req, res) => {
   try {
-    res.json(await users.updateUser(req.params.id, req.body));
+    const updated = await users.updateUser(req.params.id, req.body);
+    // Takes effect immediately rather than when the cached state expires.
+    auth.invalidateUserState(req.params.id);
+    res.json(updated);
   } catch (error) {
     sendStoreError(res, error, 'فشل تعديل المستخدم');
   }
@@ -981,7 +1040,9 @@ app.delete('/api/users/:id', auth.requirePermission('canManageUsers'), async (re
     if (req.params.id === req.auth.sub) {
       return res.status(400).json({ error: 'لا يمكنك حذف حسابك الحالي' });
     }
-    res.json(await users.deleteUser(req.params.id));
+    const removed = await users.deleteUser(req.params.id);
+    auth.invalidateUserState(req.params.id);
+    res.json(removed);
   } catch (error) {
     sendStoreError(res, error, 'فشل حذف المستخدم');
   }

@@ -386,8 +386,13 @@ body {
   bottom: 0;
   background-color: rgba(15, 23, 42, 0.6);
   display: flex;
-  align-items: center;
+  /* Top-aligned, not centred: a form taller than the phone screen was being
+     centred, which pushed its own header — and the close button with it — above
+     the top of the viewport where nothing could reach it. */
+  align-items: flex-start;
   justify-content: center;
+  padding: 1rem;
+  overflow-y: auto;
   z-index: 1000;
 }
 
@@ -399,6 +404,26 @@ body {
   width: 90%;
   border: 2px solid var(--border);
   box-shadow: var(--shadow-lg);
+  /* Long forms scroll inside the dialog rather than dragging it off screen. */
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  margin: auto;
+}
+
+/* The close row rides along as the dialog scrolls, so the way out is never
+   further than the top of whatever the user is currently looking at. */
+.modal-close-bar {
+  position: sticky;
+  top: -2rem;                 /* cancels the dialog's own top padding */
+  margin: -2rem -2rem 0.5rem -2rem;
+  padding: 0.5rem 0.75rem;
+  background-color: var(--bg-card);
+  border-bottom: 1px solid var(--border-light);
+  border-radius: 18px 18px 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  z-index: 5;
 }
 
 .modal-footer {

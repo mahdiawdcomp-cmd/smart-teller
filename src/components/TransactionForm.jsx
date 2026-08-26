@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { api } from '../utils/api';
-import { ArrowLeftRight, X, ShieldAlert } from 'lucide-react';
+import Modal from './Modal';
+import { ArrowLeftRight, ShieldAlert } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 const formatNumberWithCommas = (val) => {
@@ -104,19 +105,7 @@ export default function TransactionForm({ customer, onClose, onSuccess }) {
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content" style={{ maxWidth: '550px' }}>
-        
-        {/* Modal Header */}
-        <div className="panel-header" style={{ marginBottom: '1.5rem' }}>
-          <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <ArrowLeftRight size={24} color="var(--primary)" />
-            عملية مالية لـ: {customer.name}
-          </h2>
-          <button onClick={onClose} className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', borderRadius: '8px' }}>
-            <X size={20} />
-          </button>
-        </div>
+    <Modal onClose={onClose} maxWidth="550px" title={`عملية مالية لـ: ${customer.name}`}>
 
         {error && (
           <div className="toast toast-error" style={{ marginBottom: '1.5rem' }}>
@@ -312,7 +301,6 @@ export default function TransactionForm({ customer, onClose, onSuccess }) {
           </div>
 
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../utils/api';
+import Modal from './Modal';
 import { FileText, Send, Download, Calendar, User, ArrowLeft, Loader, Pencil, Trash2, History, RefreshCw, Receipt } from 'lucide-react';
 
 /** Renders an audit-log snapshot as a short Arabic line. */
@@ -784,11 +785,7 @@ export default function Statements({ customer, onBack, onLedgerChanged, permissi
 
       {/* Edit transaction modal */}
       {editingTx && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="panel-header">
-              <h2>تعديل العملية</h2>
-            </div>
+        <Modal title="تعديل العملية" onClose={() => setEditingTx(null)}>
 
             <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: 0 }}>
               بتاريخ {new Date(editingTx.date).toLocaleString('ar-EG')} — سيتم تصحيح الرصيد تلقائياً بعد الحفظ.
@@ -855,8 +852,7 @@ export default function Statements({ customer, onBack, onLedgerChanged, permissi
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       <style>{`

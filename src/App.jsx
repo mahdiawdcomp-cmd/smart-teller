@@ -10,6 +10,7 @@ import Reports from './components/Reports';
 import BackupPanel from './components/BackupPanel';
 import UsersPanel from './components/UsersPanel';
 import DebtReminder from './components/DebtReminder';
+import Modal from './components/Modal';
 import TransactionSearch from './components/TransactionSearch';
 import WelcomeTour, { shouldShowTour, resetTour } from './components/WelcomeTour';
 import SharedStatementView from './components/SharedStatementView';
@@ -643,11 +644,10 @@ export default function App() {
 
       {/* 1. Modal for Add New Customer */}
       {showAddCustomerModal && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="panel-header">
-              <h2>إضافة زبون جديد للمكتب</h2>
-            </div>
+        <Modal
+          title="إضافة زبون جديد للمكتب"
+          onClose={() => { setShowAddCustomerModal(false); setDuplicateWarning(null); setAddCustError(''); }}
+        >
 
             {addCustError && (
               <div className="toast toast-error">
@@ -732,8 +732,7 @@ export default function App() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* The welcome tour, shown over the app on the first few sign-ins */}
@@ -743,11 +742,10 @@ export default function App() {
 
       {/* 1.5 Modal for editing / merging a customer */}
       {editingCustomer && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="panel-header">
-              <h2>تعديل بيانات الزبون</h2>
-            </div>
+        <Modal
+          title="تعديل بيانات الزبون"
+          onClose={() => { setEditingCustomer(null); setEditCustError(''); }}
+        >
 
             {editCustError && <div className="toast toast-error">{editCustError}</div>}
 
@@ -815,8 +813,7 @@ export default function App() {
             >
               {editCustBusy ? 'جاري الدمج...' : 'دمج الحسابين'}
             </button>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* 2. Modal for Transaction Creation */}

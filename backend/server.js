@@ -546,10 +546,12 @@ app.post('/api/expenses', auth.requirePermission('canViewReports'), async (req, 
 
     if (db) {
       const docRef = await db.collection('expenses').add(newExpense);
+      store.invalidateLedgerCache();
       return res.status(201).json({ id: docRef.id, ...newExpense });
     } else {
       const expenseWithId = { id: Date.now().toString(), ...newExpense };
       await store.mutateLocal(data => { data.expenses.push(expenseWithId); });
+      store.invalidateLedgerCache();
       return res.status(201).json(expenseWithId);
     }
   } catch (error) {
@@ -564,11 +566,13 @@ app.delete('/api/expenses/:id', auth.requirePermission('canViewReports'), async 
 
     if (db) {
       await db.collection('expenses').doc(expenseId).delete();
+      store.invalidateLedgerCache();
       return res.json({ message: 'Expense deleted successfully' });
     } else {
       await store.mutateLocal(data => {
         data.expenses = data.expenses.filter(e => e.id !== expenseId);
       });
+      store.invalidateLedgerCache();
       return res.json({ message: 'Expense deleted successfully' });
     }
   } catch (error) {

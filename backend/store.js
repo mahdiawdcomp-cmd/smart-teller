@@ -432,6 +432,8 @@ async function addTransaction(customerId, input, actor) {
     });
   }
 
+  invalidateLedgerCache();
+
   await appendAuditLog(buildAuditEntry({
     action: 'create',
     customerId,
@@ -502,6 +504,8 @@ async function updateTransaction(customerId, txId, input, actor) {
     });
   }
 
+  invalidateLedgerCache();
+
   await appendAuditLog(buildAuditEntry({
     action: 'update',
     customerId,
@@ -568,6 +572,8 @@ async function deleteTransaction(customerId, txId, actor) {
       return { before, balance: customer.balance, customerName: customer.name };
     });
   }
+
+  invalidateLedgerCache();
 
   await appendAuditLog(buildAuditEntry({
     action: 'delete',
@@ -837,6 +843,8 @@ async function mergeCustomers(sourceId, targetId, actor) {
     });
   }
 
+  invalidateLedgerCache();
+
   await appendAuditLog(buildAuditEntry({
     action: 'merge',
     customerId: targetId,
@@ -911,40 +919,92 @@ async function saveIdempotentResult(key, result) {
  * to be created by hand, and a report silently failing on a fresh deployment is
  * worse than a few extra reads at this scale.
  */
-async function listAllTransactions({ from = null, to = null } = {}) {
-  const fromIso = from ? new Date(from).toISOString() : null;
-  const toIso = to ? new Date(to).toISOString() : null;
+// A short-lived cache of the whole ledger.
+//
+// Reports, search and the cash box all need the same rows, and an office
+// refreshing a report three times in a row should not pay for three full scans.
+// Sixty seconds is short enough that a teller never sees a stale number for
+// long, and any write clears it immediately anyway.
+let ledgerCache = null;
+const LEDGER_CACHE_MS = 60 * 1000;
 
-  const inRange = (tx) => {
-    if (fromIso && tx.date < fromIso) return false;
-    if (toIso && tx.date > toIso) return false;
-    return true;
-  };
+function invalidateLedgerCache() {
+  ledgerCache = null;
+}
+
+/** Every transaction in the office, tagged with its customer. One query. */
+async function loadWholeLedger() {
+  if (ledgerCache && Date.now() - ledgerCache.at < LEDGER_CACHE_MS) {
+    return ledgerCache.rows;
+  }
 
   const customers = await listCustomers();
-  const out = [];
+  const nameById = new Map(customers.map(c => [c.id, c.name]));
+  const rows = [];
 
-  for (const customer of customers) {
-    if (db) {
-      await ensureMigrated(customer.id);
-      let query = db.collection('customers').doc(customer.id).collection('transactions');
-      if (fromIso) query = query.where('date', '>=', fromIso);
-      if (toIso) query = query.where('date', '<=', toIso);
+  if (db) {
+    // One collectionGroup query reaches every customer's transactions at once.
+    // The previous version issued two queries PER CUSTOMER, so a report on fifty
+    // customers cost a hundred round trips before it could render anything.
+    const snap = await db.collectionGroup('transactions').get();
 
-      const snap = await query.get();
-      snap.forEach(d => {
-        out.push({ ...d.data(), customerId: customer.id, customerName: customer.name });
+    snap.forEach(doc => {
+      const customerId = doc.ref.parent.parent?.id;
+      if (!customerId) return;
+      rows.push({
+        ...doc.data(),
+        customerId,
+        customerName: nameById.get(customerId) || ''
       });
-    } else {
-      const data = await readLocal();
-      const local = data.customers.find(c => c.id === customer.id);
-      for (const tx of (local?.transactions || [])) {
-        if (inRange(tx)) out.push({ ...tx, customerId: customer.id, customerName: customer.name });
+    });
+
+    // Customers still holding the old embedded array have no subcollection yet,
+    // so their history would be missing from every total until they migrate.
+    for (const customer of customers) {
+      if (customer.txMigrated === true) continue;
+
+      const doc = await db.collection('customers').doc(customer.id).get();
+      const embedded = doc.exists ? doc.data().transactions : null;
+      if (!Array.isArray(embedded)) continue;
+
+      for (const tx of embedded) {
+        rows.push({
+          ...tx,
+          balanceDelta: Number.isFinite(tx.balanceDelta)
+            ? tx.balanceDelta
+            : computeDelta(tx.type, tx.amount, tx.commission),
+          customerId: customer.id,
+          customerName: customer.name
+        });
+      }
+    }
+  } else {
+    const data = await readLocal();
+    for (const customer of data.customers) {
+      for (const tx of (customer.transactions || [])) {
+        rows.push({ ...tx, customerId: customer.id, customerName: customer.name });
       }
     }
   }
 
-  return out.sort((a, b) => new Date(a.date) - new Date(b.date));
+  rows.sort((a, b) => new Date(a.date) - new Date(b.date));
+  ledgerCache = { at: Date.now(), rows };
+  return rows;
+}
+
+/** Transactions within a date range, filtered from the cached ledger. */
+async function listAllTransactions({ from = null, to = null } = {}) {
+  const rows = await loadWholeLedger();
+
+  const fromIso = from ? new Date(from).toISOString() : null;
+  const toIso = to ? new Date(to).toISOString() : null;
+  if (!fromIso && !toIso) return rows;
+
+  return rows.filter(tx => {
+    if (fromIso && tx.date < fromIso) return false;
+    if (toIso && tx.date > toIso) return false;
+    return true;
+  });
 }
 
 /** Expenses in a date range. */
@@ -1216,6 +1276,8 @@ module.exports = {
   ensureMigrated,
   migrateAllCustomers,
   listAllTransactions,
+  loadWholeLedger,
+  invalidateLedgerCache,
   listExpenses,
   searchTransactions,
   findPossibleDuplicates,

@@ -43,17 +43,36 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
   .map(o => o.trim())
   .filter(Boolean);
 
-app.use(cors({
-  origin: (origin, callback) => {
-    // No Origin header: same-origin navigation, curl, or the WhatsApp bot.
-    if (!origin) return callback(null, true);
-    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    // Vite dev server.
-    if (process.env.NODE_ENV !== 'production' && /^http:\/\/localhost:\d+$/.test(origin)) {
-      return callback(null, true);
-    }
-    return callback(new Error('Origin not allowed by CORS'));
+app.use(cors((req, callback) => {
+  const origin = req.header('Origin');
+
+  // No Origin header: a plain navigation, curl, or the WhatsApp bot.
+  if (!origin) return callback(null, { origin: true });
+
+  // The page asking for its own assets. The browser attaches an Origin header to
+  // anything marked crossorigin — which Vite does for the bundle — so without
+  // this the app's own script and stylesheet were refused and the page rendered
+  // blank. Compared against the request's Host so it works on any domain the
+  // service is reached by, without naming them.
+  let sameOrigin = false;
+  try {
+    sameOrigin = new URL(origin).host === req.header('Host');
+  } catch {
+    sameOrigin = false;
   }
+  if (sameOrigin) return callback(null, { origin: true });
+
+  if (ALLOWED_ORIGINS.includes(origin)) return callback(null, { origin: true });
+
+  // Vite dev server.
+  if (process.env.NODE_ENV !== 'production' && /^http:\/\/localhost:\d+$/.test(origin)) {
+    return callback(null, { origin: true });
+  }
+
+  // Refuse by withholding the CORS headers, not by raising an error. Throwing
+  // here turns a disallowed origin into a 500 for everyone, including the site
+  // itself; omitting the headers lets the browser block it, which is the point.
+  return callback(null, { origin: false });
 }));
 /**
  * Security headers.

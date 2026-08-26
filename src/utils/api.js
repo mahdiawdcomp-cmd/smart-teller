@@ -220,6 +220,81 @@ export const api = {
     return res.json(); // returns { pdfBase64 }
   },
 
+  // Cash box
+  getCashBox: async ({ from, to } = {}) => {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    const query = params.toString() ? `?${params}` : '';
+
+    const res = await authFetch(`/cashbox${query}`);
+    if (!res.ok) throw await readError(res, 'فشل تحميل بيانات الصندوق');
+    return res.json();
+  },
+
+  addCashCount: async (countedAmount, notes) => {
+    const res = await authFetch('/cashbox/count', {
+      method: 'POST',
+      body: JSON.stringify({ countedAmount, notes })
+    });
+    if (!res.ok) throw await readError(res, 'فشل تسجيل الجرد');
+    return res.json();
+  },
+
+  getCashCounts: async () => {
+    const res = await authFetch('/cashbox/counts');
+    if (!res.ok) throw await readError(res, 'فشل تحميل سجل الجرد');
+    return res.json();
+  },
+
+  // Settings
+  getSettings: async () => {
+    const res = await authFetch('/settings');
+    if (!res.ok) throw await readError(res, 'فشل تحميل الإعدادات');
+    return res.json();
+  },
+
+  updateSettings: async (patch) => {
+    const res = await authFetch('/settings', {
+      method: 'PATCH',
+      body: JSON.stringify(patch)
+    });
+    if (!res.ok) throw await readError(res, 'فشل حفظ الإعدادات');
+    return res.json();
+  },
+
+  // Reports
+  getReport: async ({ preset, from, to }) => {
+    const params = new URLSearchParams();
+    if (preset) params.set('preset', preset);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+
+    const res = await authFetch(`/reports?${params}`);
+    if (!res.ok) throw await readError(res, 'فشل توليد التقرير');
+    return res.json();
+  },
+
+  // Backup
+  downloadBackup: async () => {
+    const res = await authFetch('/backup/export');
+    if (!res.ok) throw await readError(res, 'فشل تصدير النسخة الاحتياطية');
+    return res.text();
+  },
+
+  runBackup: async () => {
+    const res = await authFetch('/backup/run', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'فشل إرسال النسخة الاحتياطية');
+    return data;
+  },
+
+  getBackupStatus: async () => {
+    const res = await authFetch('/backup/status');
+    if (!res.ok) throw await readError(res, 'فشل قراءة حالة النسخ الاحتياطي');
+    return res.json();
+  },
+
   // Auth API
   login: async (password) => {
     const res = await publicFetch('/auth/login', {

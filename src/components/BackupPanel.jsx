@@ -1,0 +1,112 @@
+import React, { useState, useEffect } from 'react';
+import { api } from '../utils/api';
+import { ShieldCheck, Download, Send } from 'lucide-react';
+
+/**
+ * Backup controls.
+ *
+ * The server keeps a copy in backend/data/database.json, but Render wipes that
+ * disk on every deploy — so a backup only counts once it has left the server.
+ */
+export default function BackupPanel() {
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+
+  const loadStatus = async () => {
+    try {
+      setStatus(await api.getBackupStatus());
+    } catch {
+      // A missing status is not worth interrupting the settings screen for.
+    }
+  };
+
+  useEffect(() => { loadStatus(); }, []);
+
+  const handleDownload = async () => {
+    setBusy('download');
+    setMessage('');
+    try {
+      const json = await api.downloadBackup();
+      const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `smart-teller-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+
+      setMessage('تم تنزيل النسخة الاحتياطية ✅');
+      setTimeout(() => setMessage(''), 4000);
+    } catch (err) {
+      setMessage(`خطأ: ${err.message}`);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleSendNow = async () => {
+    setBusy('send');
+    setMessage('');
+    try {
+      const result = await api.runBackup();
+      setMessage(`تم إرسال النسخة الاحتياطية إلى واتساب المالك ✅ (${result.fileName})`);
+      setTimeout(() => setMessage(''), 6000);
+      await loadStatus();
+    } catch (err) {
+      setMessage(`خطأ: ${err.message}`);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const lastRun = status?.lastRun;
+
+  return (
+    <div className="panel-card" style={{ marginTop: '1.5rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+        <ShieldCheck size={26} color="var(--success)" />
+        <h3 style={{ margin: 0 }}>النسخ الاحتياطي</h3>
+      </div>
+
+      <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>
+        نسخة كاملة تلقائية تُرسل يومياً إلى واتساب المالك الساعة الثانية فجراً. احتفظ بالملفات — هي خط الدفاع الأخير عن بياناتك.
+      </p>
+
+      {message && (
+        <div className={`toast ${message.includes('خطأ') ? 'toast-error' : 'toast-success'}`}>
+          {message}
+        </div>
+      )}
+
+      {lastRun && (
+        <div
+          className="toast"
+          style={{
+            backgroundColor: lastRun.ok ? 'rgba(22, 163, 74, 0.08)' : 'rgba(220, 38, 38, 0.08)',
+            color: lastRun.ok ? 'var(--success)' : 'var(--danger)',
+            borderColor: lastRun.ok ? 'var(--success)' : 'var(--danger)'
+          }}
+        >
+          آخر نسخة: {new Date(lastRun.startedAt).toLocaleString('ar-EG')}
+          {lastRun.ok
+            ? ` — تمت بنجاح (${lastRun.counts?.transactions ?? 0} عملية)`
+            : ` — فشلت: ${lastRun.error}`}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <button className="btn btn-primary" onClick={handleDownload} disabled={busy !== ''} style={{ flex: 1, minWidth: '200px' }}>
+          <Download size={18} />
+          {busy === 'download' ? 'جاري التحضير...' : 'تنزيل نسخة الآن'}
+        </button>
+
+        <button className="btn btn-success" onClick={handleSendNow} disabled={busy !== ''} style={{ flex: 1, minWidth: '200px' }}>
+          <Send size={18} />
+          {busy === 'send' ? 'جاري الإرسال...' : 'إرسال نسخة للواتساب الآن'}
+        </button>
+      </div>
+    </div>
+  );
+}

@@ -99,13 +99,18 @@ function withLocalLock(fn) {
 async function readLocal() {
   try {
     const data = await fs.readJson(LOCAL_DB_PATH);
+    // Spread first: a write is always a full-file overwrite, so any section this
+    // function forgets to carry over is silently erased on the next save.
     return {
+      ...(data || {}),
       customers: data?.customers || [],
       expenses: data?.expenses || [],
-      auditLogs: data?.auditLogs || []
+      auditLogs: data?.auditLogs || [],
+      cashCounts: data?.cashCounts || [],
+      settings: data?.settings || {}
     };
   } catch {
-    return { customers: [], expenses: [], auditLogs: [] };
+    return { customers: [], expenses: [], auditLogs: [], cashCounts: [], settings: {} };
   }
 }
 
@@ -626,6 +631,242 @@ async function sumAllCommissions() {
   return total;
 }
 
+// ─── Reporting: scanning the ledger across customers ───
+
+/**
+ * Every transaction in a date range, tagged with its customer.
+ *
+ * Queries each customer's subcollection separately rather than using a
+ * collectionGroup query: a collection-group range query needs an index that has
+ * to be created by hand, and a report silently failing on a fresh deployment is
+ * worse than a few extra reads at this scale.
+ */
+async function listAllTransactions({ from = null, to = null } = {}) {
+  const fromIso = from ? new Date(from).toISOString() : null;
+  const toIso = to ? new Date(to).toISOString() : null;
+
+  const inRange = (tx) => {
+    if (fromIso && tx.date < fromIso) return false;
+    if (toIso && tx.date > toIso) return false;
+    return true;
+  };
+
+  const customers = await listCustomers();
+  const out = [];
+
+  for (const customer of customers) {
+    if (db) {
+      await ensureMigrated(customer.id);
+      let query = db.collection('customers').doc(customer.id).collection('transactions');
+      if (fromIso) query = query.where('date', '>=', fromIso);
+      if (toIso) query = query.where('date', '<=', toIso);
+
+      const snap = await query.get();
+      snap.forEach(d => {
+        out.push({ ...d.data(), customerId: customer.id, customerName: customer.name });
+      });
+    } else {
+      const data = await readLocal();
+      const local = data.customers.find(c => c.id === customer.id);
+      for (const tx of (local?.transactions || [])) {
+        if (inRange(tx)) out.push({ ...tx, customerId: customer.id, customerName: customer.name });
+      }
+    }
+  }
+
+  return out.sort((a, b) => new Date(a.date) - new Date(b.date));
+}
+
+/** Expenses in a date range. */
+async function listExpenses({ from = null, to = null } = {}) {
+  let expenses;
+
+  if (db) {
+    const snap = await db.collection('expenses').get();
+    expenses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  } else {
+    expenses = (await readLocal()).expenses;
+  }
+
+  const fromIso = from ? new Date(from).toISOString() : null;
+  const toIso = to ? new Date(to).toISOString() : null;
+
+  return expenses.filter(e => {
+    if (fromIso && e.date < fromIso) return false;
+    if (toIso && e.date > toIso) return false;
+    return true;
+  });
+}
+
+// ─── Settings (opening cash, and anything else the office configures) ───
+
+const DEFAULT_SETTINGS = { openingCash: 0 };
+
+async function getSettings() {
+  if (db) {
+    const doc = await db.collection('settings').doc('office').get();
+    return { ...DEFAULT_SETTINGS, ...(doc.exists ? doc.data() : {}) };
+  }
+
+  const data = await readLocal();
+  return { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
+}
+
+async function updateSettings(patch) {
+  const clean = {};
+  if (patch.openingCash !== undefined) {
+    const value = Number(patch.openingCash);
+    if (!Number.isFinite(value)) throw badRequest('رأس المال الافتتاحي يجب أن يكون رقماً');
+    clean.openingCash = value;
+  }
+
+  if (Object.keys(clean).length === 0) throw badRequest('لا توجد إعدادات صالحة للحفظ');
+
+  if (db) {
+    await db.collection('settings').doc('office').set(clean, { merge: true });
+    return getSettings();
+  }
+
+  return withLocalLock(async () => {
+    const data = await readLocal();
+    data.settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}), ...clean };
+    await writeLocal(data);
+    return data.settings;
+  });
+}
+
+// ─── Cash box ───
+
+/**
+ * What should physically be in the drawer.
+ *
+ * Deposits bring cash in, withdrawals take cash out, expenses take cash out.
+ * The commission is deliberately absent: it is never handed over, so it stays
+ * in the drawer as part of what the deposits already brought in.
+ */
+async function getCashBox({ from = null, to = null } = {}) {
+  const [settings, transactions, expenses] = await Promise.all([
+    getSettings(),
+    listAllTransactions({ from, to }),
+    listExpenses({ from, to })
+  ]);
+
+  let cashIn = 0;
+  let cashOut = 0;
+  let commission = 0;
+
+  for (const tx of transactions) {
+    if (tx.type === 'deposit') {
+      cashIn += Number(tx.amount) || 0;
+    } else {
+      cashOut += Number(tx.amount) || 0;
+      commission += Number(tx.commission) || 0;
+    }
+  }
+
+  const expensesTotal = expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+
+  // The opening capital only belongs in an all-time view; a filtered period
+  // reports the movement within that period, not the whole drawer.
+  const isFullHistory = !from && !to;
+  const openingCash = isFullHistory ? (Number(settings.openingCash) || 0) : 0;
+
+  const expectedCash = openingCash + cashIn - cashOut - expensesTotal;
+  const counts = await listCashCounts({ limit: 1 });
+
+  return {
+    openingCash,
+    cashIn,
+    cashOut,
+    commission,
+    expensesTotal,
+    expectedCash,
+    isFullHistory,
+    lastCount: counts[0] || null
+  };
+}
+
+/** Records a physical count of the drawer and the difference against expectations. */
+async function addCashCount({ countedAmount, notes }, actor) {
+  const counted = Number(countedAmount);
+  if (!Number.isFinite(counted) || counted < 0) {
+    throw badRequest('المبلغ المعدود يجب أن يكون رقماً صحيحاً');
+  }
+
+  const box = await getCashBox();
+  const record = {
+    id: crypto.randomBytes(12).toString('hex'),
+    at: new Date().toISOString(),
+    countedAmount: counted,
+    expectedAmount: box.expectedCash,
+    difference: counted - box.expectedCash,
+    notes: typeof notes === 'string' ? notes.slice(0, 500) : '',
+    actor: actor || 'admin'
+  };
+
+  if (db) {
+    await db.collection('cashCounts').doc(record.id).set(record);
+  } else {
+    await withLocalLock(async () => {
+      const data = await readLocal();
+      data.cashCounts = [record, ...(data.cashCounts || [])].slice(0, 500);
+      await writeLocal(data);
+    });
+  }
+
+  return record;
+}
+
+async function listCashCounts({ limit = 30 } = {}) {
+  if (db) {
+    const snap = await db.collection('cashCounts').orderBy('at', 'desc').limit(limit).get();
+    return snap.docs.map(d => d.data());
+  }
+
+  const data = await readLocal();
+  return (data.cashCounts || []).slice(0, limit);
+}
+
+// ─── Backup ───
+
+/**
+ * A complete, restorable snapshot of the office's data.
+ *
+ * The local database.json is not a backup: Render wipes the disk on every
+ * deploy. This is the export that actually leaves the server.
+ */
+async function exportEverything() {
+  const customers = await listCustomers();
+  const full = [];
+
+  for (const customer of customers) {
+    const detail = await getCustomer(customer.id, { limit: 100000 });
+    full.push(detail);
+  }
+
+  const [expenses, settings, cashCounts, auditLogs] = await Promise.all([
+    listExpenses({}),
+    getSettings(),
+    listCashCounts({ limit: 500 }),
+    listAuditLogs({ limit: 500 })
+  ]);
+
+  return {
+    exportedAt: new Date().toISOString(),
+    version: 1,
+    counts: {
+      customers: full.length,
+      transactions: full.reduce((sum, c) => sum + (c.transactions?.length || 0), 0),
+      expenses: expenses.length
+    },
+    customers: full,
+    expenses,
+    settings,
+    cashCounts,
+    auditLogs
+  };
+}
+
 module.exports = {
   computeDelta,
   normalizeTransactionInput,
@@ -641,6 +882,14 @@ module.exports = {
   sumAllCommissions,
   ensureMigrated,
   migrateAllCustomers,
+  listAllTransactions,
+  listExpenses,
+  getSettings,
+  updateSettings,
+  getCashBox,
+  addCashCount,
+  listCashCounts,
+  exportEverything,
   readLocal,
   writeLocal,
   withLocalLock

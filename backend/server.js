@@ -47,6 +47,10 @@ const { getWhatsAppStatus, sendStatementPDF, logoutWhatsApp, requestPairingCodeF
 // Import background scheduler
 require('./scheduler');
 
+// Reporting and the automatic off-server backup
+const reports = require('./reports');
+const backup = require('./backup');
+
 // Path for local database fallback
 const LOCAL_DB_PATH = path.join(__dirname, 'data', 'database.json');
 fs.ensureFileSync(LOCAL_DB_PATH);
@@ -439,6 +443,98 @@ app.get('/api/profits', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// --- CASH BOX ---
+
+// 8.1 What should be in the drawer right now (or within a period)
+app.get('/api/cashbox', async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    res.json(await store.getCashBox({ from: from || null, to: to || null }));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تحميل بيانات الصندوق');
+  }
+});
+
+// 8.2 Record a physical count and its difference against the expected amount
+app.post('/api/cashbox/count', async (req, res) => {
+  try {
+    const record = await store.addCashCount(req.body, req.auth?.role || 'admin');
+    res.status(201).json(record);
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تسجيل الجرد');
+  }
+});
+
+// 8.3 Previous counts
+app.get('/api/cashbox/counts', async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 30, 200);
+    res.json(await store.listCashCounts({ limit }));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تحميل سجل الجرد');
+  }
+});
+
+// --- SETTINGS ---
+
+app.get('/api/settings', async (req, res) => {
+  try {
+    res.json(await store.getSettings());
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تحميل الإعدادات');
+  }
+});
+
+app.patch('/api/settings', async (req, res) => {
+  try {
+    res.json(await store.updateSettings(req.body));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل حفظ الإعدادات');
+  }
+});
+
+// --- REPORTS ---
+
+// 8.4 Totals, daily trend and per-customer rows for a date range
+app.get('/api/reports', async (req, res) => {
+  try {
+    const { preset, from, to } = req.query;
+    res.json(await reports.buildReport({ preset, from, to }));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل توليد التقرير');
+  }
+});
+
+// --- BACKUP ---
+
+// 10.1 Download a full snapshot on demand
+app.get('/api/backup/export', async (req, res) => {
+  try {
+    const snapshot = await store.exportEverything();
+    const stamp = new Date().toISOString().slice(0, 10);
+
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="smart-teller-backup-${stamp}.json"`);
+    res.send(JSON.stringify(snapshot, null, 2));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تصدير النسخة الاحتياطية');
+  }
+});
+
+// 10.2 Trigger the WhatsApp backup now, and report when it last ran
+app.post('/api/backup/run', async (req, res) => {
+  try {
+    const result = await backup.runBackup();
+    res.status(result.ok ? 200 : 503).json(result);
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تشغيل النسخ الاحتياطي');
+  }
+});
+
+app.get('/api/backup/status', (req, res) => {
+  res.json({ lastRun: backup.getLastRun(), schedule: process.env.BACKUP_CRON || '0 2 * * *' });
 });
 
 // --- WHATSAPP BOT ROUTES ---

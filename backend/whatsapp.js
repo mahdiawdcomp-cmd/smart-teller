@@ -244,6 +244,30 @@ async function sendTextMessage(phoneNumber, text) {
   return true;
 }
 
+// --- Send an arbitrary file (used by the automatic backup) ---
+async function sendDocument(phoneNumber, buffer, fileName, mimetype, caption) {
+  if (connectionState !== 'connected' || !sock) {
+    throw new Error('WhatsApp Bot is not connected.');
+  }
+
+  let cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+  if (!cleanNumber.startsWith('964') && cleanNumber.startsWith('0')) {
+    cleanNumber = '964' + cleanNumber.substring(1);
+  } else if (!cleanNumber.startsWith('964')) {
+    cleanNumber = '964' + cleanNumber;
+  }
+
+  await sock.sendMessage(`${cleanNumber}@s.whatsapp.net`, {
+    document: buffer,
+    mimetype: mimetype || 'application/octet-stream',
+    fileName,
+    caption: caption || ''
+  });
+
+  console.log(`Document "${fileName}" sent to ${phoneNumber}`);
+  return true;
+}
+
 // --- Check and initialize WhatsApp connection on startup ---
 function normalizePhone(phone) {
   let clean = phone.replace(/[^0-9]/g, '');
@@ -292,6 +316,7 @@ module.exports = {
   }),
   sendStatementPDF,
   sendTextMessage,
+  sendDocument,
   requestPairingCodeForPhone,
   logoutWhatsApp: async () => {
     if (sock) {

@@ -5,6 +5,9 @@ import TransactionForm from './components/TransactionForm';
 import Statements from './components/Statements';
 import Expenses from './components/Expenses';
 import WhatsAppSetup from './components/WhatsAppSetup';
+import CashBox from './components/CashBox';
+import Reports from './components/Reports';
+import BackupPanel from './components/BackupPanel';
 import SharedStatementView from './components/SharedStatementView';
 import { Landmark, Users, ArrowUpRight, ArrowDownRight, LogOut, Key, Phone, ShieldCheck } from 'lucide-react';
 
@@ -20,7 +23,7 @@ export default function App() {
   const [authWarning, setAuthWarning] = useState('');
 
   // Active navigation tab
-  const [activeTab, setActiveTab] = useState('customers'); // 'customers' | 'expenses' | 'whatsapp'
+  const [activeTab, setActiveTab] = useState('customers'); // 'customers' | 'cashbox' | 'reports' | 'expenses' | 'whatsapp'
   
   // Data states
   const [customers, setCustomers] = useState([]);
@@ -389,10 +392,22 @@ export default function App() {
               💰 المصاريف والأرباح
             </button>
             <button 
+              className={`tab-btn ${activeTab === 'cashbox' ? 'active' : ''}`}
+              onClick={() => setActiveTab('cashbox')}
+            >
+              🧾 صندوق المكتب
+            </button>
+            <button 
+              className={`tab-btn ${activeTab === 'reports' ? 'active' : ''}`}
+              onClick={() => setActiveTab('reports')}
+            >
+              📊 التقارير
+            </button>
+            <button 
               className={`tab-btn ${activeTab === 'whatsapp' ? 'active' : ''}`}
               onClick={() => setActiveTab('whatsapp')}
             >
-              📱 إعدادات البوت والواتساب
+              📱 الإعدادات والنسخ الاحتياطي
             </button>
           </nav>
         )}
@@ -422,7 +437,16 @@ export default function App() {
 
             {activeTab === 'expenses' && <Expenses />}
 
-            {activeTab === 'whatsapp' && <WhatsAppSetup />}
+            {activeTab === 'cashbox' && <CashBox />}
+
+            {activeTab === 'reports' && <Reports />}
+
+            {activeTab === 'whatsapp' && (
+              <>
+                <WhatsAppSetup />
+                <BackupPanel />
+              </>
+            )}
           </>
         )}
 

@@ -1,0 +1,28 @@
+rules_version = '2';
+
+// Smart Teller — Firestore security rules.
+//
+// Every read and write is denied to clients. This is deliberate and complete:
+// the browser never talks to Firestore directly, it talks to our Express server,
+// and the server uses the Firebase Admin SDK, which bypasses these rules entirely.
+//
+// This matters because the VITE_FIREBASE_* keys are compiled into the frontend
+// bundle and are readable by anyone who opens the site. Those keys identify the
+// project; they are not a secret and they are not access control. Without a rule
+// like this one, anyone could read every customer, balance and phone number
+// straight out of the database, ignoring our server and its login entirely.
+//
+// Deploy with:
+//   firebase deploy --only firestore:rules
+// Or paste into: Firebase Console -> Firestore Database -> Rules -> Publish.
+//
+// Verify afterwards in the console's Rules Playground: a read of
+// /customers/{anything} as an unauthenticated user must be DENIED.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

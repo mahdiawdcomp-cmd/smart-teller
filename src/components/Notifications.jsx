@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../utils/api';
-import { Bell, BellRing, BellOff, Volume2, VolumeX, Smartphone, Check } from 'lucide-react';
+import { Bell, BellRing, BellOff, Volume2, VolumeX, Smartphone, Check, X } from 'lucide-react';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 
@@ -214,6 +215,21 @@ export default function Notifications({ onOpenCustomer }) {
     }
   };
 
+  /**
+   * While the sheet is open the page behind it must not scroll.
+   *
+   * Two reasons: dragging the sheet should not drag the ledger underneath it,
+   * and removing the page scrollbar removes the sliver of width it was taking —
+   * which was pushing the sheet a few pixels past the edge of the screen.
+   */
+  useEffect(() => {
+    if (!open) return;
+
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
+  }, [open]);
+
   const openPanel = () => {
     setOpen(!open);
     if (!open) {
@@ -261,29 +277,20 @@ export default function Notifications({ onOpenCustomer }) {
         )}
       </button>
 
-      {open && (
+      {/* Rendered at the document root rather than inside the header.
+          Nested in the header, the sheet kept inheriting an offset from its
+          ancestors and sat 13px off the edge of the screen; at the root its
+          position is the viewport's and nothing else can shift it. */}
+      {open && createPortal(
         <>
           {/* Tapping anywhere else closes the panel. */}
-          <div
-            onClick={() => setOpen(false)}
-            style={{ position: 'fixed', inset: 0, zIndex: 900 }}
-          />
+          <div className="notif-backdrop" onClick={() => setOpen(false)} />
 
-          <div style={{
-            position: 'absolute',
-            top: '52px',
-            left: 0,
-            width: 'min(360px, calc(100vw - 2rem))',
-            maxHeight: '70vh',
-            overflowY: 'auto',
-            backgroundColor: 'var(--bg-card)',
-            border: '1px solid var(--border-light)',
-            borderRadius: '14px',
-            boxShadow: '0 10px 30px rgba(0,0,0,.18)',
-            zIndex: 901,
-            padding: '0.9rem'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+          {/* A dropdown on a wide screen, a sheet from the bottom on a phone.
+              Anchored to the bell, it was being clipped by the small screen and
+              half the list simply could not be reached. */}
+          <div className="notif-panel">
+            <div className="notif-header">
               <h3 style={{ margin: 0, fontSize: '17px' }}>الإشعارات</h3>
 
               <button
@@ -299,7 +306,19 @@ export default function Notifications({ onOpenCustomer }) {
               >
                 {soundOn ? <Volume2 size={18} /> : <VolumeX size={18} />}
               </button>
+
+              {/* On the sheet there is no "outside" left to tap, so it needs its own way out. */}
+              <button
+                className="notif-close"
+                onClick={() => setOpen(false)}
+                aria-label="إغلاق"
+                title="إغلاق"
+              >
+                <X size={20} />
+              </button>
             </div>
+
+            <div className="notif-body">
 
             {/* Device notifications */}
             <div style={{
@@ -399,8 +418,10 @@ export default function Notifications({ onOpenCustomer }) {
                 })}
               </div>
             )}
+            </div>
           </div>
-        </>
+        </>,
+        document.body
       )}
     </div>
   );

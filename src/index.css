@@ -700,3 +700,113 @@ body {
     grid-template-columns: repeat(2, 1fr) !important;
   }
 }
+
+/* ─── Notifications panel ───────────────────────────────────────────────
+   A dropdown anchored to the bell works on a wide screen. On a phone it was
+   being clipped by the edge of the screen, so most of the list could not be
+   reached at all. Below 768px it becomes a sheet from the bottom instead —
+   full width, its own scroll, and a close button, which is the shape a phone
+   can actually show. */
+
+.notif-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+}
+
+.notif-panel {
+  /* Explicit: without it the padding is added to the width, which on a phone
+     pushed the sheet 32px wider than the screen and shifted it sideways. */
+  box-sizing: border-box;
+  /* Fixed to the viewport — the panel lives at the document root, so it is
+     anchored to the screen rather than to whatever contains the bell. */
+  position: fixed;
+  top: 72px;
+  left: 1rem;
+  width: min(360px, calc(100vw - 2rem));
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .18);
+  z-index: 901;
+  padding: 0.9rem;
+}
+
+.notif-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  flex-shrink: 0;
+}
+
+/* Only the list scrolls; the header and the device controls stay put. */
+.notif-body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+/* On a wide screen the backdrop is the way out, so this would be clutter. */
+.notif-close {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .notif-backdrop {
+    background-color: rgba(15, 23, 42, 0.5);
+  }
+
+  .notif-panel {
+    position: fixed;
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    /* left+right pin both edges; stating a width as well over-constrains the
+       box and the browser then ignores one of them. */
+    width: auto;
+    /* Tall enough to be useful, short enough to still show the page behind it
+       so it is obvious this is a panel and not a new screen. */
+    height: 85vh;
+    max-height: 85vh;
+    border-radius: 18px 18px 0 0;
+    border-bottom: none;
+    padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px)) 1rem;
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, .25);
+  }
+
+  /* A grab handle, so it reads as something that can be dismissed. */
+  .notif-panel::before {
+    content: '';
+    display: block;
+    width: 42px;
+    height: 4px;
+    border-radius: 2px;
+    background-color: var(--border);
+    margin: -0.35rem auto 0.75rem auto;
+    flex-shrink: 0;
+  }
+
+  .notif-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    background: var(--bg-light);
+    border: 1px solid var(--border-light);
+    border-radius: 9px;
+    cursor: pointer;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .notif-header h3 {
+    flex: 1;
+  }
+}

@@ -761,9 +761,16 @@ app.get('/api/cashbox/counts', auth.requirePermission('canViewReports'), async (
 
 // --- SETTINGS ---
 
-app.get('/api/settings', auth.requirePermission('canViewReports'), async (req, res) => {
+app.get('/api/settings', async (req, res) => {
   try {
-    res.json(await store.getSettings());
+    const settings = await store.getSettings();
+
+    // Money figures are owner-only; the tour flag is not, and every account
+    // needs to read it to know whether to show the tour.
+    if (users.permissionsFor(req.auth?.role).canViewReports) {
+      return res.json(settings);
+    }
+    res.json({ showWelcomeTour: settings.showWelcomeTour });
   } catch (error) {
     sendStoreError(res, error, 'فشل تحميل الإعدادات');
   }

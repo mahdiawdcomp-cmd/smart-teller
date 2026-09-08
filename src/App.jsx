@@ -59,6 +59,7 @@ export default function App() {
 
   // The welcome tour: three showings per account, then it stops on its own.
   const [showTour, setShowTour] = useState(false);
+  const [tourEnabled, setTourEnabled] = useState(true);
 
   const permissions = currentUser?.permissions || {};
 
@@ -90,8 +91,12 @@ export default function App() {
         if (cancelled) return;
         setCurrentUser(me.user);
         setIsAuthenticated(true);
-        setShowTour(shouldShowTour(me.user));
         loadCustomers();
+
+        const settings = await api.getSettings().catch(() => ({ showWelcomeTour: true }));
+        if (cancelled) return;
+        setTourEnabled(settings.showWelcomeTour !== false);
+        setShowTour(shouldShowTour(me.user, settings.showWelcomeTour));
       } catch {
         session.clear();
         if (!cancelled) setIsAuthenticated(false);
@@ -176,9 +181,14 @@ export default function App() {
         // Logged in directly (staff account, or two-factor not configured)
         session.set(res.token);
         setCurrentUser(res.user);
-        setShowTour(shouldShowTour(res.user));
         setIsAuthenticated(true);
         loadCustomers();
+        api.getSettings()
+          .then(st => {
+            setTourEnabled(st.showWelcomeTour !== false);
+            setShowTour(shouldShowTour(res.user, st.showWelcomeTour));
+          })
+          .catch(() => setShowTour(shouldShowTour(res.user)));
         if (res.warning) {
           alert(res.warning);
         }
@@ -202,7 +212,12 @@ export default function App() {
       if (res.success) {
         session.set(res.token);
         setCurrentUser(res.user);
-        setShowTour(shouldShowTour(res.user));
+        api.getSettings()
+          .then(st => {
+            setTourEnabled(st.showWelcomeTour !== false);
+            setShowTour(shouldShowTour(res.user, st.showWelcomeTour));
+          })
+          .catch(() => setShowTour(shouldShowTour(res.user)));
         setOtpSessionId(null);
         setOtpSent(false);
         setPassword('');
@@ -641,14 +656,38 @@ export default function App() {
                 <div className="panel-card" style={{ marginTop: '1.5rem' }}>
                   <h3 style={{ marginTop: 0 }}>شرح الموقع</h3>
                   <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>
-                    دليل سريع يشرح كل شاشة خطوة خطوة.
+                    {tourEnabled
+                      ? 'الشرح يظهر تلقائياً أول ثلاث مرات لكل مستخدم جديد.'
+                      : 'الشرح متوقف — ما راح يظهر تلقائياً لأي أحد.'}
                   </p>
-                  <button
-                    className="btn btn-primary btn-block"
-                    onClick={() => { resetTour(currentUser.id); setShowTour(true); }}
-                  >
-                    افتح شرح الموقع
-                  </button>
+
+                  <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => { resetTour(currentUser.id); setShowTour(true); }}
+                      style={{ flex: 1, minWidth: '150px' }}
+                    >
+                      افتحه الآن
+                    </button>
+
+                    <button
+                      className={tourEnabled ? 'btn btn-danger' : 'btn btn-success'}
+                      onClick={async () => {
+                        const next = !tourEnabled;
+                        setTourEnabled(next);
+                        if (!next) setShowTour(false);
+                        try {
+                          await api.updateSettings({ showWelcomeTour: next });
+                        } catch (err) {
+                          setTourEnabled(!next);
+                          window.alert(err.message);
+                        }
+                      }}
+                      style={{ flex: 1, minWidth: '150px' }}
+                    >
+                      {tourEnabled ? 'أوقف الشرح نهائياً' : 'أعد تشغيل الشرح'}
+                    </button>
+                  </div>
                 </div>
               </>
             )}
@@ -759,7 +798,14 @@ export default function App() {
 
       {/* The welcome tour, shown over the app on the first few sign-ins */}
       {showTour && currentUser && (
-        <WelcomeTour user={currentUser} onClose={() => setShowTour(false)} />
+        <WelcomeTour
+          user={currentUser}
+          onClose={() => setShowTour(false)}
+          onDismissForever={() => {
+            setTourEnabled(false);
+            api.updateSettings({ showWelcomeTour: false }).catch(() => {});
+          }}
+        />
       )}
 
       {/* 1.5 Modal for editing / merging a customer */}

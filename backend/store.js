@@ -1107,6 +1107,10 @@ async function searchTransactions({
 
 const DEFAULT_SETTINGS = {
   openingCash: 0,
+  // The welcome tour. Kept on the server rather than per-browser: dismissing it
+  // on the phone should also dismiss it on the computer, which is the whole
+  // reason it kept reappearing.
+  showWelcomeTour: true,
   // Debt reminders — off until the owner turns them on.
   debtReminderEnabled: false,
   debtReminderDays: 7,
@@ -1132,6 +1136,10 @@ async function updateSettings(patch) {
     const value = Number(patch.openingCash);
     if (!Number.isFinite(value)) throw badRequest('رأس المال الافتتاحي يجب أن يكون رقماً');
     clean.openingCash = roundMoney(value);
+  }
+
+  if (patch.showWelcomeTour !== undefined) {
+    clean.showWelcomeTour = !!patch.showWelcomeTour;
   }
 
   if (patch.debtReminderEnabled !== undefined) {

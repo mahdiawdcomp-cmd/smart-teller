@@ -34,8 +34,18 @@ function markDone(userId) {
   localStorage.setItem(STORAGE_PREFIX + userId, String(MAX_SHOWS));
 }
 
-export function shouldShowTour(user) {
+/**
+ * Whether to show the tour.
+ *
+ * Two gates. The server flag is the one that matters: switching the tour off is
+ * a decision about the account, not about the browser it was made in, and
+ * keeping it per-device meant dismissing it on the phone left it still
+ * appearing on the computer. The local count only stops it after a few showings
+ * for someone who never dismisses it explicitly.
+ */
+export function shouldShowTour(user, serverEnabled = true) {
   if (!user?.id) return false;
+  if (serverEnabled === false) return false;
   return timesSeen(user.id) < MAX_SHOWS;
 }
 
@@ -129,7 +139,7 @@ const LAST_STEP = {
   tip: 'إذا نسيت شي، ارجعله من زر «شرح الموقع» بصفحة الإعدادات.'
 };
 
-export default function WelcomeTour({ user, onClose }) {
+export default function WelcomeTour({ user, onClose, onDismissForever }) {
   const [step, setStep] = useState(0);
 
   const steps = [
@@ -149,6 +159,9 @@ export default function WelcomeTour({ user, onClose }) {
 
   const finish = (permanently) => {
     if (permanently && user?.id) markDone(user.id);
+    // Also switch it off for the account, so it cannot come back on another
+    // device. Best effort — a failure here must not trap anyone in the tour.
+    if (permanently && onDismissForever) onDismissForever();
     onClose();
   };
 
@@ -262,15 +275,14 @@ export default function WelcomeTour({ user, onClose }) {
           </button>
         </div>
 
+        {/* A real button, not muted text at the bottom: someone who wants this
+            to stop should not have to hunt for the way to stop it. */}
         <button
+          className="btn btn-secondary"
           onClick={() => finish(true)}
-          style={{
-            background: 'transparent', border: 'none', cursor: 'pointer',
-            color: 'var(--text-muted)', fontSize: '14px',
-            marginTop: '0.85rem', minHeight: '44px'
-          }}
+          style={{ marginTop: '0.85rem', minHeight: '48px', width: '100%' }}
         >
-          لا تعرض هذا الشرح مرة ثانية
+          إيقاف الشرح نهائياً
         </button>
 
         {remaining > 0 && (

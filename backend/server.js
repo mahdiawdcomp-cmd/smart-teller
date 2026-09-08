@@ -88,10 +88,9 @@ app.use((req, res, next) => {
     "script-src 'self'; " +
     // The UI creates a worker from a blob; without this the page half-loads.
     "worker-src 'self' blob:; " +
-    // Inline styles are used throughout the UI, and the Arabic font (Tajawal)
-    // is a Google Fonts stylesheet — blocking it silently changes every screen.
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-    "font-src 'self' data: https://fonts.gstatic.com; " +
+    // The font is served from this origin now, so no external host is needed.
+    "style-src 'self' 'unsafe-inline'; " +
+    "font-src 'self' data:; " +
     "img-src 'self' data: blob:; " +         // QR codes arrive as data URLs
     "connect-src 'self'; " +
     "object-src 'none'; " +
@@ -129,6 +128,7 @@ require('./scheduler');
 const reports = require('./reports');
 const backup = require('./backup');
 const debtReminder = require('./debtReminder');
+const notifications = require('./notifications');
 
 // Path for local database fallback
 const LOCAL_DB_PATH = path.join(__dirname, 'data', 'database.json');
@@ -383,6 +383,13 @@ app.post('/api/customers/:id/transactions', auth.requirePermission('canRecordTra
     if (key) await store.saveIdempotentResult(key, result);
 
     res.status(201).json(result);
+
+    // After the response: a push that fails must never fail the transaction.
+    notifications.notifyTransaction({
+      customerName: result.customerName,
+      transaction: result.transaction,
+      balance: result.balance
+    }).catch(err => console.error('[PUSH] transaction notify failed:', err.message));
   } catch (error) {
     sendStoreError(res, error, 'فشل إضافة العملية');
   }
@@ -767,6 +774,58 @@ app.patch('/api/settings', auth.requirePermission('canManageSettings'), async (r
     res.json(await store.updateSettings(req.body));
   } catch (error) {
     sendStoreError(res, error, 'فشل حفظ الإعدادات');
+  }
+});
+
+// --- NOTIFICATIONS ---
+
+// The in-app feed: what happened, newest first.
+app.get('/api/notifications', async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    res.json(await notifications.recentActivity({ limit, since: req.query.since || null }));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تحميل الإشعارات');
+  }
+});
+
+// What the browser needs before it can subscribe.
+app.get('/api/notifications/config', (req, res) => {
+  res.json({
+    enabled: notifications.isPushConfigured(),
+    publicKey: notifications.getPublicKey()
+  });
+});
+
+// A device asking to be told about transactions.
+app.post('/api/notifications/subscribe', async (req, res) => {
+  try {
+    const label = `${req.auth?.name || 'مستخدم'} — ${(req.get('user-agent') || '').slice(0, 80)}`;
+    res.json(await notifications.saveSubscription(req.body?.subscription, label));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل تفعيل الإشعارات');
+  }
+});
+
+app.post('/api/notifications/unsubscribe', async (req, res) => {
+  try {
+    res.json(await notifications.removeSubscription(req.body?.endpoint));
+  } catch (error) {
+    sendStoreError(res, error, 'فشل إيقاف الإشعارات');
+  }
+});
+
+// A test alert, so the owner can confirm it actually reaches the phone.
+app.post('/api/notifications/test', async (req, res) => {
+  try {
+    const result = await notifications.sendPush({
+      title: '🔔 تجربة الإشعارات',
+      body: 'إذا وصلتك هذه الرسالة، الإشعارات تشتغل تماماً.',
+      tag: 'test'
+    });
+    res.json(result);
+  } catch (error) {
+    sendStoreError(res, error, 'فشل إرسال التجربة');
   }
 });
 

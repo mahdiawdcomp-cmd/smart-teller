@@ -12,6 +12,7 @@ import UsersPanel from './components/UsersPanel';
 import DebtReminder from './components/DebtReminder';
 import Modal from './components/Modal';
 import useAutoRefresh from './hooks/useAutoRefresh';
+import Notifications from './components/Notifications';
 import TransactionSearch from './components/TransactionSearch';
 import WelcomeTour, { shouldShowTour, resetTour } from './components/WelcomeTour';
 import SharedStatementView from './components/SharedStatementView';
@@ -479,7 +480,8 @@ export default function App() {
           <h1>حساب الصراف الذكي</h1>
         </div>
         
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <Notifications onOpenCustomer={openCustomerStatement} />
         {currentUser && (
           <span style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
             {currentUser.name}

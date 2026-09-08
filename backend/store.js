@@ -1273,6 +1273,51 @@ async function listCashCounts({ limit = 30 } = {}) {
   return (data.cashCounts || []).slice(0, limit);
 }
 
+// ─── Push subscriptions ───
+//
+// One row per browser that asked for notifications. Keyed by a hash of the
+// endpoint so a device re-subscribing replaces its own row instead of piling up
+// duplicates that would each deliver the same alert.
+
+function subscriptionKey(endpoint) {
+  return crypto.createHash('sha256').update(String(endpoint)).digest('hex').slice(0, 32);
+}
+
+async function listPushSubscriptions() {
+  if (db) {
+    const snap = await db.collection('pushSubscriptions').get();
+    return snap.docs.map(d => d.data());
+  }
+  const data = await readLocal();
+  return data.pushSubscriptions || [];
+}
+
+async function savePushSubscription(record) {
+  const key = subscriptionKey(record.endpoint);
+
+  if (db) {
+    await db.collection('pushSubscriptions').doc(key).set(record);
+    return;
+  }
+
+  await mutateLocal(data => {
+    if (!Array.isArray(data.pushSubscriptions)) data.pushSubscriptions = [];
+    data.pushSubscriptions = data.pushSubscriptions.filter(s => s.endpoint !== record.endpoint);
+    data.pushSubscriptions.push(record);
+  });
+}
+
+async function deletePushSubscription(endpoint) {
+  if (db) {
+    await db.collection('pushSubscriptions').doc(subscriptionKey(endpoint)).delete();
+    return;
+  }
+
+  await mutateLocal(data => {
+    data.pushSubscriptions = (data.pushSubscriptions || []).filter(s => s.endpoint !== endpoint);
+  });
+}
+
 // ─── Backup ───
 
 /**
@@ -1351,5 +1396,9 @@ module.exports = {
   readLocal,
   writeLocal,
   withLocalLock,
-  mutateLocal
+  mutateLocal,
+  hasCloudDb: () => !!db,
+  listPushSubscriptions,
+  savePushSubscription,
+  deletePushSubscription
 };

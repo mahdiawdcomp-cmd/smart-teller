@@ -169,6 +169,43 @@ export const api = {
     return res.json();
   },
 
+  // Notifications
+  getNotifications: async () => {
+    const res = await authFetch('/notifications');
+    if (!res.ok) throw await readError(res, 'فشل تحميل الإشعارات');
+    return res.json();
+  },
+
+  getNotificationConfig: async () => {
+    const res = await authFetch('/notifications/config');
+    if (!res.ok) throw await readError(res, 'فشل قراءة إعدادات الإشعارات');
+    return res.json();
+  },
+
+  subscribePush: async (subscription) => {
+    const res = await authFetch('/notifications/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({ subscription })
+    });
+    if (!res.ok) throw await readError(res, 'فشل تفعيل الإشعارات');
+    return res.json();
+  },
+
+  unsubscribePush: async (endpoint) => {
+    const res = await authFetch('/notifications/unsubscribe', {
+      method: 'POST',
+      body: JSON.stringify({ endpoint })
+    });
+    if (!res.ok) throw await readError(res, 'فشل إيقاف الإشعارات');
+    return res.json();
+  },
+
+  testPush: async () => {
+    const res = await authFetch('/notifications/test', { method: 'POST' });
+    if (!res.ok) throw await readError(res, 'فشل إرسال التجربة');
+    return res.json();
+  },
+
   // Debts
   getDebts: async () => {
     const res = await authFetch('/debts');

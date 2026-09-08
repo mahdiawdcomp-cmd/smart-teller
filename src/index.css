@@ -810,3 +810,58 @@ body {
     flex: 1;
   }
 }
+
+/* ─── Statement ledger ──────────────────────────────────────────────────
+   Numbers read left-to-right even in an Arabic layout, and a column of them
+   only compares at a glance when the digits line up. Tabular figures keep
+   every digit the same width so 1,111 and 9,999 occupy the same space. */
+
+.ledger-table td,
+.ledger-table th {
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-table td:nth-child(3),
+.ledger-table td:nth-child(4),
+.ledger-table td:nth-child(5) {
+  direction: ltr;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ledger-table .ledger-opening td {
+  background-color: var(--bg-light);
+  color: var(--text-muted);
+}
+
+.ledger-table .ledger-total td {
+  background-color: var(--bg-light);
+  border-top: 2px solid var(--border);
+  font-size: 15px;
+}
+
+@media (max-width: 768px) {
+  /* As cards, each figure sits opposite its own label, so the LTR alignment
+     that helps a column is wrong here — the value belongs beside its name. */
+  .ledger-table.cards-on-mobile td:nth-child(3),
+  .ledger-table.cards-on-mobile td:nth-child(4),
+  .ledger-table.cards-on-mobile td:nth-child(5) {
+    text-align: left;
+  }
+
+  /* The balance is what the row is for; give it weight on a small screen. */
+  .ledger-table.cards-on-mobile td:nth-child(5) {
+    font-size: 17px;
+    border-top: 1px dashed var(--border-light);
+    padding-top: 0.6rem;
+  }
+
+  .ledger-table.cards-on-mobile .ledger-total td,
+  .ledger-table.cards-on-mobile .ledger-opening td {
+    background-color: transparent;
+  }
+
+  .ledger-table.cards-on-mobile tfoot tr {
+    border: 2px solid var(--border);
+  }
+}

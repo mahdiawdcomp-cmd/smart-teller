@@ -3,6 +3,9 @@ import { api } from '../utils/api';
 import Modal from './Modal';
 import { FileText, Send, Download, Calendar, User, ArrowLeft, Loader, Pencil, Trash2, History, RefreshCw, Receipt } from 'lucide-react';
 
+/** Money as plain digits — no currency word repeated on every cell of a ledger. */
+const fmtMoney = (n) => Number(n || 0).toLocaleString('en-US');
+
 /** Renders an audit-log snapshot as a short Arabic line. */
 function describeAuditValue(value) {
   if (!value) return '—';
@@ -91,6 +94,62 @@ export default function Statements({ customer, onBack, onLedgerChanged, permissi
     setFilteredTransactions(customer.transactions.filter(t => inPeriod(t, bounds)));
   }, [customer, filter, startDate, endDate]);
 
+  /** Signed effect of a transaction, matching the server's balanceDelta. */
+  const deltaOf = (tx) => Number.isFinite(tx.balanceDelta)
+    ? tx.balanceDelta
+    : (tx.type === 'deposit' ? tx.amount : -(tx.amount + (tx.commission || 0)));
+
+  /**
+   * The period as a ledger: oldest first, each row carrying the balance as it
+   * stood immediately after that operation.
+   *
+   * Read top to bottom the balance column tells the account's whole story, which
+   * is the point of a ledger and what the previous table could not do — it
+   * showed amounts with no running total, so the only way to check a balance was
+   * to add the rows up by hand.
+   *
+   * The screen and the printed statement both read from here, so the paper can
+   * never disagree with what it was printed from.
+   */
+  const buildLedger = () => {
+    if (!customer || !customer.transactions) {
+      return { opening: 0, rows: [], closing: 0, totalDebit: 0, totalCredit: 0 };
+    }
+
+    const bounds = getPeriodBounds();
+    const chronological = [...customer.transactions].reverse();
+
+    // Everything before the period, summed — not today's balance, which would be
+    // wrong for any period that is not the present one.
+    const opening = chronological
+      .filter(tx => bounds.start && new Date(tx.date) < bounds.start)
+      .reduce((sum, tx) => sum + deltaOf(tx), 0);
+
+    let running = opening;
+    let totalDebit = 0;
+    let totalCredit = 0;
+
+    const rows = chronological.filter(tx => inPeriod(tx, bounds)).map(tx => {
+      const commission = Number(tx.commission) || 0;
+      const isDeposit = tx.type === 'deposit';
+
+      // Debit is what the customer owes us, credit what we owe them. A
+      // withdrawal carries its commission: both leave the customer's balance.
+      const debit = isDeposit ? 0 : Number(tx.amount) + commission;
+      const credit = isDeposit ? Number(tx.amount) : 0;
+
+      totalDebit += debit;
+      totalCredit += credit;
+      running += deltaOf(tx);
+
+      return { ...tx, debit, credit, commission, runningBalance: running };
+    });
+
+    return { opening, rows, closing: running, totalDebit, totalCredit };
+  };
+
+  const ledger = buildLedger();
+
   // Format date range text in Arabic
   const getPeriodText = () => {
     const now = new Date();
@@ -117,38 +176,11 @@ export default function Statements({ customer, onBack, onLedgerChanged, permissi
     downloadLink.click();
   };
 
-  /** Signed effect of a transaction, matching the server's balanceDelta. */
-  const deltaOf = (tx) => Number.isFinite(tx.balanceDelta)
-    ? tx.balanceDelta
-    : (tx.type === 'deposit' ? tx.amount : -(tx.amount + (tx.commission || 0)));
-
-  // Helper to construct the chronological PDF payload with running balances
+  // The printed statement is the same ledger the screen is showing.
   const getPdfPayload = () => {
     if (!customer || !customer.transactions) return null;
 
-    const bounds = getPeriodBounds();
-
-    // Oldest to newest. The server hands the ledger over newest-first.
-    const chronologicalTxs = [...customer.transactions].reverse();
-
-    // The opening balance is everything that happened BEFORE the period — derived
-    // by summing it, not by reading today's balance. A period with no activity
-    // used to print today's number, so a quiet July statement showed August money.
-    const openingBalance = chronologicalTxs
-      .filter(tx => bounds.start && new Date(tx.date) < bounds.start)
-      .reduce((sum, tx) => sum + deltaOf(tx), 0);
-
-    let currentBal = openingBalance;
-    const filteredWithBal = chronologicalTxs
-      .filter(tx => inPeriod(tx, bounds))
-      .map(tx => {
-        currentBal += deltaOf(tx);
-        return { ...tx, runningBalance: currentBal };
-      });
-
-    // Closing balance = opening + everything inside the period, which stays
-    // correct when the period is empty.
-    const finalBalance = currentBal;
+    const { opening: openingBalance, rows: filteredWithBal, closing: finalBalance } = ledger;
 
     return {
       customerName: customer.name,
@@ -642,50 +674,76 @@ export default function Statements({ customer, onBack, onLedgerChanged, permissi
         </div>
       </div>
 
-      {filteredTransactions.length === 0 ? (
+      {ledger.rows.length === 0 ? (
         <p style={{ textAlign: 'center', color: 'var(--text-muted)', margin: '3rem 0' }}>
           لا توجد عمليات مسجلة في هذه الفترة المحددة.
         </p>
       ) : (
         <div className="table-wrapper">
-          <table className="app-table cards-on-mobile">
+          <table className="app-table ledger-table cards-on-mobile">
             <thead>
               <tr>
-                <th>التاريخ والوقت</th>
-                <th>نوع العملية</th>
-                <th>المبلغ الإجمالي (د.ع)</th>
-                <th>الملاحظات</th>
+                <th style={{ width: '130px' }}>التاريخ</th>
+                <th>البيان</th>
+                <th style={{ width: '130px' }}>مدين — عليه</th>
+                <th style={{ width: '130px' }}>دائن — له</th>
+                <th style={{ width: '140px' }}>الرصيد</th>
                 <th style={{ width: '120px' }}>إجراءات</th>
               </tr>
             </thead>
             <tbody>
-              {filteredTransactions.map((tx) => {
-                const totalAmount = tx.amount + (tx.type === 'withdrawal' ? (tx.commission || 0) : 0);
-                const displayNotes = tx.type === 'withdrawal' && tx.commission > 0
-                  ? `${tx.notes || ''} (العمولة: ${tx.commission.toLocaleString('en-US')} د.ع)`
-                  : (tx.notes || '-');
+              {/* Where the period starts from. Without it the first balance in
+                  the column would appear to come from nowhere. */}
+              <tr className="ledger-opening">
+                <td data-label="التاريخ">—</td>
+                <td data-label="البيان" style={{ fontWeight: 700 }}>رصيد سابق (افتتاحي)</td>
+                <td data-label="مدين">—</td>
+                <td data-label="دائن">—</td>
+                <td data-label="الرصيد" style={{ fontWeight: 800, color: ledger.opening >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                  {fmtMoney(ledger.opening)}
+                </td>
+                <td data-label=""></td>
+              </tr>
 
+              {ledger.rows.map((tx) => {
                 return (
                   <tr key={tx.id}>
-                    <td data-label="التاريخ" style={{ fontSize: '15px' }}>
-                      {new Date(tx.date).toLocaleString('ar-EG')}
-                    </td>
-                    <td data-label="النوع">
-                      <span className={`badge ${tx.type === 'deposit' ? 'badge-deposit' : 'badge-withdrawal'}`}>
-                        {tx.type === 'deposit' ? 'إيداع (ينطيني)' : 'سحب/حوالة (ياخذ)'}
+                    <td data-label="التاريخ" style={{ fontSize: '14px', whiteSpace: 'nowrap' }}>
+                      {new Date(tx.date).toLocaleDateString('ar-EG')}
+                      <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {new Date(tx.date).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </td>
-                    <td data-label="المبلغ" style={{ fontWeight: 'bold', color: tx.type === 'deposit' ? 'var(--success)' : 'var(--danger)' }}>
-                      {Number(totalAmount).toLocaleString('en-US')} د.ع
-                    </td>
-                    <td data-label="ملاحظات" style={{ fontSize: '16px', color: 'var(--text-dark)' }}>
-                      {displayNotes}
-                      {tx.editedAt && (
+
+                    <td data-label="البيان" style={{ fontSize: '15px' }}>
+                      {tx.notes || (tx.type === 'deposit' ? 'إيداع' : 'سحب / حوالة')}
+                      {tx.commission > 0 && (
                         <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)' }}>
-                          (عُدّلت بتاريخ {new Date(tx.editedAt).toLocaleString('ar-EG')})
+                          منها عمولة {fmtMoney(tx.commission)}
+                        </span>
+                      )}
+                      {tx.editedAt && (
+                        <span style={{ display: 'block', fontSize: '12px', color: 'var(--accent)' }}>
+                          عُدّلت بتاريخ {new Date(tx.editedAt).toLocaleDateString('ar-EG')}
                         </span>
                       )}
                     </td>
+
+                    <td data-label="مدين — عليه" style={{ fontWeight: 700, color: 'var(--danger)' }}>
+                      {tx.debit ? fmtMoney(tx.debit) : '—'}
+                    </td>
+
+                    <td data-label="دائن — له" style={{ fontWeight: 700, color: 'var(--success)' }}>
+                      {tx.credit ? fmtMoney(tx.credit) : '—'}
+                    </td>
+
+                    <td data-label="الرصيد" style={{
+                      fontWeight: 800,
+                      color: tx.runningBalance >= 0 ? 'var(--success)' : 'var(--danger)'
+                    }}>
+                      {fmtMoney(tx.runningBalance)}
+                    </td>
+
                     <td data-label="">
                       <div className="action-group" style={{ display: 'flex', gap: '0.35rem' }}>
                         <button
@@ -736,6 +794,26 @@ export default function Statements({ customer, onBack, onLedgerChanged, permissi
                 );
               })}
             </tbody>
+
+            {/* The three numbers an accountant checks first. */}
+            <tfoot>
+              <tr className="ledger-total">
+                <td data-label="" colSpan={2} style={{ fontWeight: 800 }}>الإجمالي</td>
+                <td data-label="مجموع المدين" style={{ fontWeight: 800, color: 'var(--danger)' }}>
+                  {fmtMoney(ledger.totalDebit)}
+                </td>
+                <td data-label="مجموع الدائن" style={{ fontWeight: 800, color: 'var(--success)' }}>
+                  {fmtMoney(ledger.totalCredit)}
+                </td>
+                <td data-label="الرصيد النهائي" style={{
+                  fontWeight: 900,
+                  color: ledger.closing >= 0 ? 'var(--success)' : 'var(--danger)'
+                }}>
+                  {fmtMoney(ledger.closing)}
+                </td>
+                <td data-label=""></td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}

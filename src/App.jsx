@@ -11,6 +11,7 @@ import BackupPanel from './components/BackupPanel';
 import UsersPanel from './components/UsersPanel';
 import DebtReminder from './components/DebtReminder';
 import Modal from './components/Modal';
+import useAutoRefresh from './hooks/useAutoRefresh';
 import TransactionSearch from './components/TransactionSearch';
 import WelcomeTour, { shouldShowTour, resetTour } from './components/WelcomeTour';
 import SharedStatementView from './components/SharedStatementView';
@@ -124,18 +125,37 @@ export default function App() {
     }
   };
 
-  // Fetch all customers data
-  const loadCustomers = async () => {
-    setLoading(true);
+  // Fetch all customers data.
+  // `silent` is used by the background refresh: flipping the loading flag there
+  // would blank the list every twenty seconds while somebody is reading it.
+  const loadCustomers = async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     try {
       const list = await api.getCustomers();
       setCustomers(list);
     } catch (err) {
-      console.error(err);
+      if (!silent) console.error(err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
+
+  /**
+   * Keeps this screen in step with whatever the other device did.
+   * Refreshes the customer list, and the open statement if one is open.
+   */
+  useAutoRefresh(async () => {
+    await loadCustomers({ silent: true });
+
+    if (selectedCustomer) {
+      try {
+        const full = await api.getCustomer(selectedCustomer.id);
+        setSelectedCustomer(full);
+      } catch {
+        // leave what is on screen; the next tick tries again
+      }
+    }
+  }, { enabled: isAuthenticated && !sharedToken });
 
   // 1. Password Verification (First Step)
   const handlePasswordSubmit = async (e) => {
